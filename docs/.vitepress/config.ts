@@ -30,6 +30,13 @@ export default defineConfig({
             { text: 'Migrating', link: '/guide/migrating' },
           ],
         },
+        {
+          text: 'Integrations',
+          items: [
+            { text: 'SAML — Microsoft Entra ID', link: '/guide/integrations/saml-azure-ad' },
+            { text: 'OIDC — Custom provider', link: '/guide/integrations/oidc-custom-provider' },
+          ],
+        },
       ],
       '/reference/': [
         {
