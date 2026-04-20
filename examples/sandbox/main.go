@@ -13,11 +13,9 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
-	"github.com/foomo/keel/telemetry"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	sso "github.com/foomo/gosso"
@@ -110,20 +108,6 @@ func randomID() string {
 }
 
 func main() {
-	// Opt-in telemetry: set GOSSO_TELEMETRY=1 to dump spans and metrics
-	// to stdout via keel's OpenTelemetry providers. gosso emits spans
-	// and metrics unconditionally through the OTel globals; without a
-	// provider they resolve to no-ops.
-	if os.Getenv("GOSSO_TELEMETRY") == "1" {
-		ctx := context.Background()
-		if _, err := telemetry.NewStdOutTraceProvider(ctx); err != nil {
-			log.Fatalf("telemetry trace: %v", err)
-		}
-		if _, err := telemetry.NewStdOutMeterProvider(ctx); err != nil {
-			log.Fatalf("telemetry metrics: %v", err)
-		}
-		log.Printf("telemetry: stdout exporters enabled")
-	}
 
 	store := newSessionStore()
 
@@ -177,33 +161,36 @@ func bridgeErrorLogger(r *http.Request, stage string, err error) {
 
 func newSAMLSP(store *sessionStore) (*saml.SP, error) {
 	metadataURL := fmt.Sprintf("%s/realms/%s/protocol/saml/descriptor", keycloakBaseURL, realm)
+	cert, key, err := saml.LoadKeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("load sp key pair: %w", err)
+	}
+	onAuth := func(_ context.Context, w http.ResponseWriter, _ *http.Request, s sso.Subject[saml.Payload]) error {
+		store.set(w, subject{
+			Protocol:     "saml",
+			ExternalID:   s.ExternalID,
+			Email:        s.Email,
+			Firstname:    s.Firstname,
+			Lastname:     s.Lastname,
+			Groups:       s.Groups,
+			NameID:       s.NameID,
+			SessionIndex: s.Raw.SessionIndex,
+			LoggedInAt:   time.Now(),
+		})
+		return nil
+	}
 	// Keycloak may still be starting up when the app launches; retry the
 	// metadata fetch for up to a minute.
-	var (
-		sp  *saml.SP
-		err error
-	)
+	var sp *saml.SP
 	for i := 0; i < 20; i++ {
 		sp, err = saml.New(
-			saml.WithEntityID(appURL+"/saml/metadata"),
-			saml.WithRootURL(appURL),
-			saml.WithIDPMetadataURL(metadataURL),
-			saml.WithCertificate(certPath, keyPath),
+			appURL+"/saml/metadata",
+			appURL,
+			metadataURL,
+			cert,
+			key,
+			onAuth,
 			saml.WithAllowIDPInitiated(false),
-			saml.WithOnAuthenticated(func(_ context.Context, w http.ResponseWriter, _ *http.Request, s sso.Subject[saml.Payload]) error {
-				store.set(w, subject{
-					Protocol:     "saml",
-					ExternalID:   s.ExternalID,
-					Email:        s.Email,
-					Firstname:    s.Firstname,
-					Lastname:     s.Lastname,
-					Groups:       s.Groups,
-					NameID:       s.NameID,
-					SessionIndex: s.Raw.SessionIndex,
-					LoggedInAt:   time.Now(),
-				})
-				return nil
-			}),
 			saml.WithOnLogout(func(_ context.Context, w http.ResponseWriter, r *http.Request) error {
 				store.clear(w, r)
 				return nil
@@ -229,31 +216,32 @@ func newSAMLSP(store *sessionStore) (*saml.SP, error) {
 
 func newOIDCRP(store *sessionStore) (*oidc.RP, error) {
 	issuer := fmt.Sprintf("%s/realms/%s", keycloakBaseURL, realm)
+	onAuth := func(_ context.Context, w http.ResponseWriter, _ *http.Request, s sso.Subject[oidc.Payload]) error {
+		store.set(w, subject{
+			Protocol:   "oidc",
+			ExternalID: s.ExternalID,
+			Email:      s.Email,
+			Firstname:  s.Firstname,
+			Lastname:   s.Lastname,
+			Groups:     s.Groups,
+			RawIDToken: s.Raw.RawIDToken,
+			LoggedInAt: time.Now(),
+		})
+		return nil
+	}
 	var (
 		rp  *oidc.RP
 		err error
 	)
 	for i := 0; i < 20; i++ {
 		rp, err = oidc.New(
-			oidc.WithIssuerURL(issuer),
-			oidc.WithClientID(oidcClientID),
-			oidc.WithClientSecret(oidcClientSecret),
-			oidc.WithRedirectURL(appURL+"/oidc/callback"),
+			issuer,
+			oidcClientID,
+			oidcClientSecret,
+			appURL+"/oidc/callback",
+			[]byte("sandbox-not-for-production-use-only"),
+			onAuth,
 			oidc.WithExtraScopes("offline_access"),
-			oidc.WithTransitSigningKey([]byte("sandbox-not-for-production-use-only")),
-			oidc.WithOnAuthenticated(func(_ context.Context, w http.ResponseWriter, _ *http.Request, s sso.Subject[oidc.Payload]) error {
-				store.set(w, subject{
-					Protocol:   "oidc",
-					ExternalID: s.ExternalID,
-					Email:      s.Email,
-					Firstname:  s.Firstname,
-					Lastname:   s.Lastname,
-					Groups:     s.Groups,
-					RawIDToken: s.Raw.RawIDToken,
-					LoggedInAt: time.Now(),
-				})
-				return nil
-			}),
 			oidc.WithOnLogout(func(_ context.Context, w http.ResponseWriter, r *http.Request) error {
 				store.clear(w, r)
 				return nil

@@ -40,4 +40,4 @@ Please be respectful and constructive in all interactions within our community a
 
 ## Questions?
 
-If you have any questions, please [open an issue](https://github.com/foomo/keel/issues/new) for discussion.
+If you have any questions, please [open an issue](https://github.com/foomo/gosso/issues/new) for discussion.

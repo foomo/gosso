@@ -19,87 +19,6 @@ const minTransitSigningKeyBytes = 32
 // Option configures an RP.
 type Option = options.OptionE[*RP]
 
-// WithIssuerURL configures OIDC discovery. All endpoints (authorization,
-// token, userinfo, jwks, end_session) are populated from
-// `<issuer>/.well-known/openid-configuration` unless overridden.
-// Required.
-//
-// Must be HTTPS. Loopback hosts (localhost, 127.0.0.1, ::1) are
-// allowed over HTTP for local development.
-func WithIssuerURL(u string) Option {
-	return func(rp *RP) error {
-		if u == "" {
-			return fmt.Errorf("issuer url must not be empty")
-		}
-
-		parsed, err := url.Parse(u)
-		if err != nil {
-			return fmt.Errorf("parse issuer url: %w", err)
-		}
-
-		if err := requireSecureURL(parsed, "issuer url"); err != nil {
-			return err
-		}
-
-		rp.issuerURL = u
-
-		return nil
-	}
-}
-
-// WithClientID sets the OIDC client identifier. Required.
-func WithClientID(id string) Option {
-	return func(rp *RP) error {
-		if id == "" {
-			return fmt.Errorf("client id must not be empty")
-		}
-
-		rp.clientID = id
-
-		return nil
-	}
-}
-
-// WithClientSecret sets the OIDC client secret (confidential client).
-// Required.
-func WithClientSecret(s string) Option {
-	return func(rp *RP) error {
-		if s == "" {
-			return fmt.Errorf("client secret must not be empty")
-		}
-
-		rp.clientSecret = s
-
-		return nil
-	}
-}
-
-// WithRedirectURL configures the callback URL. It must match the
-// redirect_uri registered at the IdP. Required.
-//
-// Must be HTTPS. Loopback hosts are allowed over HTTP for local
-// development.
-func WithRedirectURL(u string) Option {
-	return func(rp *RP) error {
-		parsed, err := url.Parse(u)
-		if err != nil {
-			return fmt.Errorf("parse redirect url: %w", err)
-		}
-
-		if parsed.Scheme == "" || parsed.Host == "" {
-			return fmt.Errorf("redirect url must be absolute: %s", u)
-		}
-
-		if err := requireSecureURL(parsed, "redirect url"); err != nil {
-			return err
-		}
-
-		rp.redirectURL = u
-
-		return nil
-	}
-}
-
 // WithExtraScopes appends scopes to the default {openid, profile, email}
 // set. Most commonly used to request `offline_access` for refresh
 // tokens.
@@ -154,21 +73,6 @@ func WithIssuerValidator(fn func(iss string) error) Option {
 	}
 }
 
-// WithTransitSigningKey sets the HMAC-SHA256 key used to sign the
-// short-lived transit cookie carrying state, nonce and PKCE verifier.
-// Required. Minimum 32 bytes.
-func WithTransitSigningKey(key []byte) Option {
-	return func(rp *RP) error {
-		if len(key) < minTransitSigningKeyBytes {
-			return fmt.Errorf("transit signing key must be at least %d bytes, got %d", minTransitSigningKeyBytes, len(key))
-		}
-
-		rp.transitSigningKey = append([]byte(nil), key...)
-
-		return nil
-	}
-}
-
 // WithTransitDeprecatedKeys adds previously-used signing keys that are
 // still accepted when verifying incoming transit cookies. Supports key
 // rotation. Each key must meet the same minimum length as the primary.
@@ -211,20 +115,6 @@ func WithTransitTTL(d time.Duration) Option {
 		}
 
 		rp.transitTTL = d
-
-		return nil
-	}
-}
-
-// WithOnAuthenticated registers the callback invoked after a successful
-// code exchange + ID token verification. Required.
-func WithOnAuthenticated(fn sso.OnAuthenticated[Payload]) Option {
-	return func(rp *RP) error {
-		if fn == nil {
-			return fmt.Errorf("OnAuthenticated must not be nil")
-		}
-
-		rp.onAuthenticated = fn
 
 		return nil
 	}

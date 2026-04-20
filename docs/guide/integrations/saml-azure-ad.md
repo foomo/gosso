@@ -10,14 +10,14 @@ and what it needs back.
 
 | Direction | Artefact | Provided by / notes |
 | --- | --- | --- |
-| **Consumer → IdP** | Entity ID (SP) | `WithEntityID`; typically `https://app.example.com/saml/metadata` |
-| Consumer → IdP | Reply URL (ACS) | Derived from `WithRootURL` → `https://app.example.com/saml/acs` |
+| **Consumer → IdP** | Entity ID (SP) | `entityID` argument to `saml.New`; typically `https://app.example.com/saml/metadata` |
+| Consumer → IdP | Reply URL (ACS) | Derived from `rootURL` → `https://app.example.com/saml/acs` |
 | Consumer → IdP | Sign-on URL (optional) | `https://app.example.com/saml/login`, for bookmarkable SP-initiated login |
 | Consumer → IdP | Logout URL | `https://app.example.com/saml/slo` |
-| Consumer → IdP | SP metadata XML | Served automatically at `{RootURL}/saml/metadata` |
-| Consumer → IdP | SP signing certificate | Public half of the RSA pair loaded by `WithCertificate` / `WithCertificatePEM` |
+| Consumer → IdP | SP metadata XML | Served automatically at `{rootURL}/saml/metadata` |
+| Consumer → IdP | SP signing certificate | Public half of the RSA pair loaded by `saml.LoadKeyPair` / `saml.ParseKeyPair` |
 | **IdP → Consumer** | IdP Entity ID / issuer | Entra emits `https://sts.windows.net/{tenant-id}/` |
-| IdP → Consumer | Federation metadata URL | `https://login.microsoftonline.com/{tenant-id}/federationmetadata/2007-06/federationmetadata.xml?appid={application-id}` — passed to `WithIDPMetadataURL` |
+| IdP → Consumer | Federation metadata URL | `https://login.microsoftonline.com/{tenant-id}/federationmetadata/2007-06/federationmetadata.xml?appid={application-id}` — passed as `idpMetadataURL` |
 | IdP → Consumer | Signing certificate | Embedded in the federation metadata XML (rotated by Microsoft) |
 | IdP → Consumer | SSO / SLO endpoints | Discoverable in metadata; `https://login.microsoftonline.com/{tenant-id}/saml2` |
 | IdP → Consumer | Assertion attributes | See **Attribute claims** below |
@@ -39,7 +39,7 @@ resolved from that document.
    - **Sign on URL** *(optional)*: `https://app.example.com/saml/login`
    - **Logout URL**: `https://app.example.com/saml/slo`
 4. Section 3 ("SAML Certificates") — copy the **App Federation Metadata
-   Url**. This is your `WithIDPMetadataURL` value.
+   Url**. This is your `idpMetadataURL` value.
 5. **Users and groups** — assign the users/groups who may log in.
 6. **(Optional)** Section 2 ("Attributes & Claims") — add a **group
    claim** if the app needs `Subject.Groups`.
@@ -82,15 +82,17 @@ library.
 ## `saml.New` configuration
 
 ```go
+cert, key, err := saml.LoadKeyPair("/etc/gosso/sp.crt", "/etc/gosso/sp.key")
+if err != nil { log.Fatal(err) }
+
 sp, err := saml.New(
-    saml.WithEntityID("https://app.example.com/saml/metadata"),
-    saml.WithRootURL("https://app.example.com"),
-    saml.WithIDPMetadataURL(
-        "https://login.microsoftonline.com/{tenant-id}/federationmetadata/2007-06/federationmetadata.xml?appid={app-id}",
-    ),
-    saml.WithCertificate("/etc/gosso/sp.crt", "/etc/gosso/sp.key"),
+    "https://app.example.com/saml/metadata",
+    "https://app.example.com",
+    "https://login.microsoftonline.com/{tenant-id}/federationmetadata/2007-06/federationmetadata.xml?appid={app-id}",
+    cert,
+    key,
+    onAuthenticated,
     // AzureADAttributeMap is the default — no WithAttributeMap needed.
-    saml.WithOnAuthenticated(onAuthenticated),
     saml.WithOnLogout(onLogout),
     saml.WithSLOHintProvider(readNameIDAndSessionIndex),
     saml.WithPostLogoutRedirectURL("https://app.example.com/"),
@@ -100,7 +102,7 @@ sp, err := saml.New(
 
 ## SP certificate lifecycle
 
-`WithCertificate` / `WithCertificatePEM` load an x509 cert + RSA
+`saml.LoadKeyPair` / `saml.ParseKeyPair` load an x509 cert + RSA
 private key. The cert is published in SP metadata and used to sign
 AuthnRequests (via crewjam/saml) so Entra can verify the SP.
 
@@ -143,5 +145,5 @@ cookie survives, and the next `/saml/login` re-authenticates silently.
       user renames their UPN.
 - [ ] Logout works end-to-end: verify the `NameID` your session stores
       matches what Entra expects (UPN by default).
-- [ ] HTTPS on `WithRootURL`. Entra rejects HTTP Reply URLs outside of
+- [ ] HTTPS on `rootURL`. Entra rejects HTTP Reply URLs outside of
       `localhost`.

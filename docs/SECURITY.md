@@ -41,5 +41,5 @@ following responsible disclosure principles and these guidelines:
 
 If you have any questions, please reach out directly by [creating an issue][new-issue].
 
-[new-issue]: https://github.com/foomo/keel/issues/new/choose
-[new-sec-issue]: https://github.com/foomo/keel/security/advisories/new
+[new-issue]: https://github.com/foomo/gosso/issues/new/choose
+[new-sec-issue]: https://github.com/foomo/gosso/security/advisories/new

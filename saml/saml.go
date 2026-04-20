@@ -26,7 +26,7 @@ const (
 // SP is a constructed SAML Service Provider. Obtain one from New and
 // mount the values returned by Handlers onto the consumer's router.
 type SP struct {
-	// configuration (set by options, read-only after New returns)
+	// configuration (set by New + options, read-only after New returns)
 	entityID              string
 	rootURL               *url.URL
 	idpMetadataURL        *url.URL
@@ -50,18 +50,65 @@ type SP struct {
 // New constructs a SAML Service Provider. It fetches the IdP metadata
 // synchronously, so a slow or unreachable IdP endpoint will surface as
 // an error here (bounded by the bootstrap timeout).
-func New(opts ...Option) (*SP, error) {
+//
+// The mandatory parameters are:
+//   - entityID: the SAML Entity ID advertised in SP metadata.
+//   - rootURL: externally reachable base URL of the consuming service
+//     (e.g. `https://app.example.com`); metadata, ACS and logout URLs
+//     are derived from it.
+//   - idpMetadataURL: the IdP metadata endpoint, fetched during New.
+//   - cert, key: the SP's x509 cert / RSA key pair. Use LoadKeyPair or
+//     ParseKeyPair to obtain them.
+//   - onAuthenticated: the callback that receives the parsed Subject
+//     after a successful assertion.
+func New(
+	entityID string,
+	rootURL string,
+	idpMetadataURL string,
+	cert *x509.Certificate,
+	key *rsa.PrivateKey,
+	onAuthenticated sso.OnAuthenticated[Payload],
+	opts ...Option,
+) (*SP, error) {
+	if entityID == "" {
+		return nil, fmt.Errorf("entity id must not be empty")
+	}
+
+	rootParsed, err := url.Parse(rootURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse root url: %w", err)
+	}
+
+	if rootParsed.Scheme == "" || rootParsed.Host == "" {
+		return nil, fmt.Errorf("root url must be absolute: %s", rootURL)
+	}
+
+	idpParsed, err := url.Parse(idpMetadataURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse idp metadata url: %w", err)
+	}
+
+	if cert == nil || key == nil {
+		return nil, fmt.Errorf("cert and key must not be nil")
+	}
+
+	if onAuthenticated == nil {
+		return nil, fmt.Errorf("onAuthenticated must not be nil")
+	}
+
 	sp := &SP{
+		entityID:         entityID,
+		rootURL:          rootParsed,
+		idpMetadataURL:   idpParsed,
+		cert:             cert,
+		key:              key,
+		onAuthenticated:  onAuthenticated,
 		attributeMap:     AzureADAttributeMap,
 		httpClient:       newInstrumentedHTTPClient(defaultHTTPClientTimeout),
 		bootstrapTimeout: defaultBootstrapTimeout,
 		onLogout:         noopOnLogout,
 	}
 	if err := options.ApplyE(sp, opts...); err != nil {
-		return nil, err
-	}
-
-	if err := sp.validate(); err != nil {
 		return nil, err
 	}
 
@@ -80,30 +127,6 @@ func New(opts ...Option) (*SP, error) {
 	sp.startAuthFlow = sp.middleware.HandleStartAuthFlow
 
 	return sp, nil
-}
-
-func (sp *SP) validate() error {
-	if sp.entityID == "" {
-		return fmt.Errorf("WithEntityID is required")
-	}
-
-	if sp.rootURL == nil {
-		return fmt.Errorf("WithRootURL is required")
-	}
-
-	if sp.idpMetadataURL == nil {
-		return fmt.Errorf("WithIDPMetadataURL is required")
-	}
-
-	if sp.cert == nil || sp.key == nil {
-		return fmt.Errorf("WithCertificate (or WithCertificatePEM) is required")
-	}
-
-	if sp.onAuthenticated == nil {
-		return fmt.Errorf("WithOnAuthenticated is required")
-	}
-
-	return nil
 }
 
 func (sp *SP) buildMiddleware(ctx context.Context) (*samlsp.Middleware, error) {

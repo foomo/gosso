@@ -27,16 +27,16 @@ The smallest possible OIDC consumer:
 
 ```go
 rp, err := oidc.New(
-    oidc.WithIssuerURL("https://login.example.com/realms/my-realm"),
-    oidc.WithClientID("my-client"),
-    oidc.WithClientSecret(os.Getenv("CLIENT_SECRET")),
-    oidc.WithRedirectURL("https://my.app/oidc/callback"),
-    oidc.WithTransitSigningKey([]byte(os.Getenv("TRANSIT_KEY"))),
-    oidc.WithOnAuthenticated(func(ctx context.Context, w http.ResponseWriter, r *http.Request, s sso.Subject[oidc.Payload]) error {
+    "https://login.example.com/realms/my-realm",
+    "my-client",
+    os.Getenv("CLIENT_SECRET"),
+    "https://my.app/oidc/callback",
+    []byte(os.Getenv("TRANSIT_KEY")),
+    func(ctx context.Context, w http.ResponseWriter, r *http.Request, s sso.Subject[oidc.Payload]) error {
         // YOU own the session — set a cookie, write a JWT, persist a row, whatever.
         log.Printf("logged in: %s (%s)", s.Email, s.ExternalID)
         return nil
-    }),
+    },
 )
 if err != nil { log.Fatal(err) }
 

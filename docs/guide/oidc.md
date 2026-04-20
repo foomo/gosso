@@ -10,16 +10,16 @@ exchange.
 
 ```go
 rp, err := oidc.New(
-    oidc.WithIssuerURL("https://login.example.com/realms/my-realm"),
-    oidc.WithClientID("my-client"),
-    oidc.WithClientSecret(os.Getenv("CLIENT_SECRET")),
-    oidc.WithRedirectURL("https://app.example.com/oidc/callback"),
-    oidc.WithExtraScopes("offline_access"), // for refresh tokens
-    oidc.WithUserInfo(true),                  // if groups live in UserInfo
-    oidc.WithTransitSigningKey([]byte(os.Getenv("TRANSIT_KEY"))),
-    oidc.WithOnAuthenticated(func(ctx context.Context, w http.ResponseWriter, r *http.Request, s sso.Subject[oidc.Payload]) error {
+    "https://login.example.com/realms/my-realm",
+    "my-client",
+    os.Getenv("CLIENT_SECRET"),
+    "https://app.example.com/oidc/callback",
+    []byte(os.Getenv("TRANSIT_KEY")),
+    func(ctx context.Context, w http.ResponseWriter, r *http.Request, s sso.Subject[oidc.Payload]) error {
         return writeSessionCookie(w, s)
-    }),
+    },
+    oidc.WithExtraScopes("offline_access"), // for refresh tokens
+    oidc.WithUserInfo(true),                // if groups live in UserInfo
     oidc.WithOnLogout(func(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
         return clearSessionCookie(w)
     }),
@@ -84,16 +84,21 @@ conflict.
 
 ## Transit cookie
 
-The transit cookie is HMAC-SHA256 signed with the key supplied to
-`WithTransitSigningKey`. **This is protocol state, not a user
-session** — it carries no identity, only the random values the
-protocol needs to correlate `/login` and `/callback`.
+The transit cookie is HMAC-SHA256 signed with the key passed as the
+`transitSigningKey` argument to `oidc.New`. **This is protocol state,
+not a user session** — it carries no identity, only the random values
+the protocol needs to correlate `/login` and `/callback`.
 
-To rotate the key:
+To rotate the key, pass the new key positionally and the old key as
+a deprecated-keys option:
 
 ```go
-oidc.WithTransitSigningKey([]byte(newKey)),
-oidc.WithTransitDeprecatedKeys([]byte(oldKey)),
+rp, err := oidc.New(
+    issuerURL, clientID, clientSecret, redirectURL,
+    []byte(newKey),
+    onAuthenticated,
+    oidc.WithTransitDeprecatedKeys([]byte(oldKey)),
+)
 ```
 
 The reader accepts signatures from the primary key or any deprecated

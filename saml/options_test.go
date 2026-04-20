@@ -7,11 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWithCertificatePEM_EmptyChainRejected(t *testing.T) {
+func TestParseKeyPair_EmptyChainRejected(t *testing.T) {
 	t.Parallel()
 
-	sp := &SP{}
-	err := WithCertificatePEM(nil, nil)(sp)
+	_, _, err := ParseKeyPair(nil, nil)
 	require.Error(t, err)
 }
 

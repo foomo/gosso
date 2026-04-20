@@ -10,15 +10,19 @@ forwards every valid assertion to your callback.
 ## Quick example
 
 ```go
+cert, key, err := saml.LoadKeyPair("/etc/gosso/sp.crt", "/etc/gosso/sp.key")
+if err != nil { log.Fatal(err) }
+
 sp, err := saml.New(
-    saml.WithEntityID("https://app.example.com/saml/metadata"),
-    saml.WithRootURL("https://app.example.com"),
-    saml.WithIDPMetadataURL("https://login.example.com/realms/my-realm/protocol/saml/descriptor"),
-    saml.WithCertificate("/etc/gosso/sp.crt", "/etc/gosso/sp.key"),
-    saml.WithOnAuthenticated(func(ctx context.Context, w http.ResponseWriter, r *http.Request, s sso.Subject[saml.Payload]) error {
+    "https://app.example.com/saml/metadata",
+    "https://app.example.com",
+    "https://login.example.com/realms/my-realm/protocol/saml/descriptor",
+    cert,
+    key,
+    func(ctx context.Context, w http.ResponseWriter, r *http.Request, s sso.Subject[saml.Payload]) error {
         // Build your session here.
         return writeSessionCookie(w, s)
-    }),
+    },
     saml.WithOnLogout(func(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
         return clearSessionCookie(w)
     }),
@@ -101,9 +105,10 @@ without prompting.
 
 ## Certificates
 
-`WithCertificate(certPath, keyPath)` loads a PEM x509 certificate
-plus RSA private key from disk. Use `WithCertificatePEM([]byte, []byte)`
-when secrets come from a vault or environment.
+`saml.LoadKeyPair(certPath, keyPath)` loads a PEM x509 certificate
+plus RSA private key from disk. Use `saml.ParseKeyPair([]byte, []byte)`
+when secrets come from a vault or environment. Both return the
+`*x509.Certificate` and `*rsa.PrivateKey` that `saml.New` expects.
 
 The cert is used to sign the SP metadata and (if
 `WithSignRequest` is ever added) the AuthnRequest itself. Keep the

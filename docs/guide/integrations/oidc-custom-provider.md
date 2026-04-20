@@ -13,21 +13,21 @@ validator pattern.
 
 | Direction | Artefact | Provided by / notes |
 | --- | --- | --- |
-| **Consumer → IdP** | Redirect URI (callback) | `WithRedirectURL`; exact string match at the IdP. `https://app.example.com/oidc/callback` |
+| **Consumer → IdP** | Redirect URI (callback) | `redirectURL` argument to `oidc.New`; exact string match at the IdP. `https://app.example.com/oidc/callback` |
 | Consumer → IdP | Post-logout redirect URI | `WithPostLogoutRedirectURL`; pre-register on most IdPs |
 | Consumer → IdP | Requested scopes | `openid profile email` unconditionally; `WithExtraScopes("offline_access", "groups", …)` for the rest |
 | Consumer → IdP | Response type | `code` (fixed) |
 | Consumer → IdP | Grant types | `authorization_code`, optionally `refresh_token` |
 | Consumer → IdP | PKCE | `code_challenge_method=S256` (fixed) |
 | Consumer → IdP | Token-endpoint auth method | `client_secret_basic` by default (driven by `golang.org/x/oauth2`) |
-| **IdP → Consumer** | Issuer URL | `WithIssuerURL`; must serve `{issuer}/.well-known/openid-configuration` |
-| IdP → Consumer | Client ID | `WithClientID` |
-| IdP → Consumer | Client secret | `WithClientSecret` — confidential client |
+| **IdP → Consumer** | Issuer URL | `issuerURL` argument to `oidc.New`; must serve `{issuer}/.well-known/openid-configuration` |
+| IdP → Consumer | Client ID | `clientID` argument |
+| IdP → Consumer | Client secret | `clientSecret` argument — confidential client |
 | IdP → Consumer | JWKS | Advertised by `jwks_uri` in the discovery document; fetched automatically |
 | IdP → Consumer | End-session endpoint | `end_session_endpoint` in discovery (only needed for RP-initiated logout) |
 | IdP → Consumer | UserInfo endpoint | `userinfo_endpoint` in discovery (only needed when `WithUserInfo(true)`) |
 
-`WithIssuerURL` and `WithRedirectURL` **must be HTTPS**. `localhost`,
+`issuerURL` and `redirectURL` **must be HTTPS**. `localhost`,
 `127.0.0.1`, `[::1]` are accepted over HTTP for local development.
 
 ## Discovery document
@@ -38,7 +38,7 @@ fields actually consulted:
 
 | Field | Purpose |
 | --- | --- |
-| `issuer` | Must equal `WithIssuerURL` (strict string compare). For IdPs that emit a different issuer value (Entra's tenant-GUID pattern is the classic case), supply `WithIssuerValidator(fn)` and validate the expected pattern inside `fn`. A validator that returns nil unconditionally disables the check — [see the option's GoDoc](../oidc#azure-entra-id-multi-tenant) for a correct example. |
+| `issuer` | Must equal the `issuerURL` argument (strict string compare). For IdPs that emit a different issuer value (Entra's tenant-GUID pattern is the classic case), supply `WithIssuerValidator(fn)` and validate the expected pattern inside `fn`. A validator that returns nil unconditionally disables the check — [see the option's GoDoc](../oidc#azure-entra-id-multi-tenant) for a correct example. |
 | `authorization_endpoint` | Redirect target for `/oidc/login`. |
 | `token_endpoint` | Called during `/oidc/callback` for the code→token exchange. |
 | `jwks_uri` | Fetched by `go-oidc` to verify the ID token signature. |
@@ -109,14 +109,14 @@ Both belong in a secret manager; neither is safe in source.
 
 ```go
 rp, err := oidc.New(
-    oidc.WithIssuerURL("https://auth.example.com/realms/my-realm"),
-    oidc.WithClientID("my-app"),
-    oidc.WithClientSecret(os.Getenv("OIDC_CLIENT_SECRET")),
-    oidc.WithRedirectURL("https://app.example.com/oidc/callback"),
-    oidc.WithTransitSigningKey([]byte(os.Getenv("OIDC_TRANSIT_KEY"))), // 32+ bytes
-    oidc.WithExtraScopes("offline_access"),                             // optional
-    oidc.WithUserInfo(true),                                            // when groups live in UserInfo
-    oidc.WithOnAuthenticated(onAuthenticated),
+    "https://auth.example.com/realms/my-realm",
+    "my-app",
+    os.Getenv("OIDC_CLIENT_SECRET"),
+    "https://app.example.com/oidc/callback",
+    []byte(os.Getenv("OIDC_TRANSIT_KEY")), // 32+ bytes
+    onAuthenticated,
+    oidc.WithExtraScopes("offline_access"), // optional
+    oidc.WithUserInfo(true),                // when groups live in UserInfo
     oidc.WithOnLogout(onLogout),
     oidc.WithLogoutHintProvider(readRawIDTokenFromSession),
     oidc.WithPostLogoutRedirectURL("https://app.example.com/"),
@@ -169,14 +169,14 @@ browser                 gosso RP                  IdP
 
 - [ ] `{issuer}/.well-known/openid-configuration` reachable from the
       service host at startup.
-- [ ] Discovery `issuer` matches `WithIssuerURL` exactly, or a
+- [ ] Discovery `issuer` matches the `issuerURL` argument exactly, or a
       validator accepts it.
 - [ ] `jwks_uri` reachable; `id_token_signing_alg_values_supported`
       includes `RS256`.
 - [ ] Client registered with PKCE `S256` **required**; gosso always
       sends `code_challenge`, but the IdP should enforce it too.
 - [ ] Redirect URI registered with the **exact** string from
-      `WithRedirectURL` (including trailing slash or lack thereof).
+      `redirectURL` (including trailing slash or lack thereof).
 - [ ] Post-logout redirect URI pre-registered if you use RP-initiated
       logout.
 - [ ] `groups` mapper / scope configured if the app uses
@@ -184,7 +184,7 @@ browser                 gosso RP                  IdP
 - [ ] Client secret and transit signing key (≥ 32 bytes) provisioned
       through a secret manager; neither appears in source or build
       artefacts.
-- [ ] `WithIssuerURL` and `WithRedirectURL` are HTTPS in every
-      environment except local dev (loopback-only exception).
+- [ ] `issuerURL` and `redirectURL` are HTTPS in every environment
+      except local dev (loopback-only exception).
 - [ ] Transit cookie name (`gosso_oidc_transit` by default) isn't
       colliding with another cookie on the host.

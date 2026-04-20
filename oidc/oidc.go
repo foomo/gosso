@@ -59,8 +59,78 @@ type RP struct {
 // New constructs an OIDC Relying Party. It performs OIDC discovery
 // synchronously; a slow or unreachable IdP surfaces as an error here
 // (bounded by the bootstrap timeout).
-func New(opts ...Option) (*RP, error) {
+//
+// The mandatory parameters are:
+//   - issuerURL: OIDC issuer; all endpoints are populated from
+//     `<issuer>/.well-known/openid-configuration` unless overridden.
+//     Must be HTTPS; loopback hosts are allowed over HTTP for local
+//     development.
+//   - clientID, clientSecret: confidential-client credentials.
+//   - redirectURL: callback URL matching the redirect_uri registered at
+//     the IdP. HTTPS required (loopback exception applies).
+//   - transitSigningKey: HMAC-SHA256 key used to sign the short-lived
+//     transit cookie carrying state, nonce and PKCE verifier. Minimum
+//     32 bytes.
+//   - onAuthenticated: callback invoked after a successful code
+//     exchange + ID token verification.
+func New(
+	issuerURL string,
+	clientID string,
+	clientSecret string,
+	redirectURL string,
+	transitSigningKey []byte,
+	onAuthenticated sso.OnAuthenticated[Payload],
+	opts ...Option,
+) (*RP, error) {
+	if issuerURL == "" {
+		return nil, fmt.Errorf("issuer url must not be empty")
+	}
+
+	issuerParsed, err := url.Parse(issuerURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse issuer url: %w", err)
+	}
+
+	if err := requireSecureURL(issuerParsed, "issuer url"); err != nil {
+		return nil, err
+	}
+
+	if clientID == "" {
+		return nil, fmt.Errorf("client id must not be empty")
+	}
+
+	if clientSecret == "" {
+		return nil, fmt.Errorf("client secret must not be empty")
+	}
+
+	redirectParsed, err := url.Parse(redirectURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse redirect url: %w", err)
+	}
+
+	if redirectParsed.Scheme == "" || redirectParsed.Host == "" {
+		return nil, fmt.Errorf("redirect url must be absolute: %s", redirectURL)
+	}
+
+	if err := requireSecureURL(redirectParsed, "redirect url"); err != nil {
+		return nil, err
+	}
+
+	if len(transitSigningKey) < minTransitSigningKeyBytes {
+		return nil, fmt.Errorf("transit signing key must be at least %d bytes, got %d", minTransitSigningKeyBytes, len(transitSigningKey))
+	}
+
+	if onAuthenticated == nil {
+		return nil, fmt.Errorf("onAuthenticated must not be nil")
+	}
+
 	rp := &RP{
+		issuerURL:         issuerURL,
+		clientID:          clientID,
+		clientSecret:      clientSecret,
+		redirectURL:       redirectURL,
+		transitSigningKey: append([]byte(nil), transitSigningKey...),
+		onAuthenticated:   onAuthenticated,
 		claimMap:          StandardClaimMap,
 		transitCookieName: defaultTransitCookieName,
 		transitTTL:        defaultTransitTTL,
@@ -72,49 +142,17 @@ func New(opts ...Option) (*RP, error) {
 		return nil, err
 	}
 
-	if err := rp.validate(); err != nil {
-		return nil, err
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), rp.bootstrapTimeout)
 	defer cancel()
 
-	if err := rp.bootstrap(ctx); err != nil {
+	if err := rp.bootstrap(ctx, redirectParsed); err != nil {
 		return nil, err
 	}
 
 	return rp, nil
 }
 
-func (rp *RP) validate() error {
-	if rp.issuerURL == "" {
-		return fmt.Errorf("WithIssuerURL is required")
-	}
-
-	if rp.clientID == "" {
-		return fmt.Errorf("WithClientID is required")
-	}
-
-	if rp.clientSecret == "" {
-		return fmt.Errorf("WithClientSecret is required")
-	}
-
-	if rp.redirectURL == "" {
-		return fmt.Errorf("WithRedirectURL is required")
-	}
-
-	if len(rp.transitSigningKey) == 0 {
-		return fmt.Errorf("WithTransitSigningKey is required")
-	}
-
-	if rp.onAuthenticated == nil {
-		return fmt.Errorf("WithOnAuthenticated is required")
-	}
-
-	return nil
-}
-
-func (rp *RP) bootstrap(ctx context.Context) error {
+func (rp *RP) bootstrap(ctx context.Context, redirectParsed *url.URL) error {
 	ctx = gooidc.ClientContext(ctx, rp.httpClient)
 
 	discoverCtx, discoverSpan := telemetry.Tracer().Start(ctx, "oidc.discover",
@@ -141,11 +179,6 @@ func (rp *RP) bootstrap(ctx context.Context) error {
 	}
 
 	rp.verifier = provider.Verifier(verifierCfg)
-
-	redirectParsed, err := url.Parse(rp.redirectURL)
-	if err != nil {
-		return fmt.Errorf("parse redirect url: %w", err)
-	}
 
 	rp.oauth2Cfg = &oauth2.Config{
 		ClientID:     rp.clientID,

@@ -14,15 +14,15 @@ import (
 )
 
 rp, err := oidc.New(
-    oidc.WithIssuerURL("https://login.example.com/realms/my-realm"),
-    oidc.WithClientID("my-client"),
-    oidc.WithClientSecret(os.Getenv("CLIENT_SECRET")),
-    oidc.WithRedirectURL("https://app.example.com/oidc/callback"),
-    oidc.WithTransitSigningKey([]byte(os.Getenv("TRANSIT_KEY"))),
-    oidc.WithOnAuthenticated(func(ctx context.Context, w http.ResponseWriter, r *http.Request, s sso.Subject[oidc.Payload]) error {
+    "https://login.example.com/realms/my-realm",
+    "my-client",
+    os.Getenv("CLIENT_SECRET"),
+    "https://app.example.com/oidc/callback",
+    []byte(os.Getenv("TRANSIT_KEY")),
+    func(ctx context.Context, w http.ResponseWriter, r *http.Request, s sso.Subject[oidc.Payload]) error {
         // You own the session. Do whatever you want with s here.
         return writeCookie(w, s)
-    }),
+    },
 )
 if err != nil { log.Fatal(err) }
 

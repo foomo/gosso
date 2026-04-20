@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/foomo/go/options"
@@ -16,100 +15,44 @@ import (
 // Option configures an SP.
 type Option = options.OptionE[*SP]
 
-// WithEntityID sets the SAML Entity ID advertised in SP metadata.
-// Required.
-func WithEntityID(id string) Option {
-	return func(sp *SP) error {
-		if id == "" {
-			return fmt.Errorf("entity id must not be empty")
-		}
-
-		sp.entityID = id
-
-		return nil
+// LoadKeyPair reads the SP's x509 cert / RSA key pair from disk. The
+// result is intended for the cert+key arguments of New.
+func LoadKeyPair(certPath, keyPath string) (*x509.Certificate, *rsa.PrivateKey, error) {
+	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load x509 key pair: %w", err)
 	}
+
+	return splitKeyPair(pair, certPath)
 }
 
-// WithRootURL is the externally reachable base URL of the consuming
-// service (e.g. `https://app.example.com`). Metadata, ACS and logout
-// URLs are derived from it. Required.
-func WithRootURL(rawURL string) Option {
-	return func(sp *SP) error {
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return fmt.Errorf("parse root url: %w", err)
-		}
-
-		if u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("root url must be absolute: %s", rawURL)
-		}
-
-		sp.rootURL = u
-
-		return nil
+// ParseKeyPair parses the SP cert / key from in-memory PEM bytes. Useful
+// for tests or when secrets are injected from a vault.
+func ParseKeyPair(certPEM, keyPEM []byte) (*x509.Certificate, *rsa.PrivateKey, error) {
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, nil, fmt.Errorf("x509 key pair: %w", err)
 	}
+
+	return splitKeyPair(pair, "PEM input")
 }
 
-// WithIDPMetadataURL configures the IdP metadata endpoint. It is fetched
-// during New. Required (unless WithIDPMetadata is used).
-func WithIDPMetadataURL(rawURL string) Option {
-	return func(sp *SP) error {
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return fmt.Errorf("parse idp metadata url: %w", err)
-		}
-
-		sp.idpMetadataURL = u
-
-		return nil
-	}
-}
-
-// WithCertificate loads the SP's x509 cert / RSA key pair from disk.
-// Required.
-func WithCertificate(certPath, keyPath string) Option {
-	return func(sp *SP) error {
-		pair, err := tls.LoadX509KeyPair(certPath, keyPath)
-		if err != nil {
-			return fmt.Errorf("load x509 key pair: %w", err)
-		}
-
-		return applyKeyPair(sp, pair, certPath)
-	}
-}
-
-// WithCertificatePEM loads the SP cert / key from in-memory PEM bytes.
-// Useful for tests or when secrets are injected from a vault.
-func WithCertificatePEM(certPEM, keyPEM []byte) Option {
-	return func(sp *SP) error {
-		pair, err := tls.X509KeyPair(certPEM, keyPEM)
-		if err != nil {
-			return fmt.Errorf("x509 key pair: %w", err)
-		}
-
-		return applyKeyPair(sp, pair, "PEM input")
-	}
-}
-
-func applyKeyPair(sp *SP, pair tls.Certificate, source string) error {
+func splitKeyPair(pair tls.Certificate, source string) (*x509.Certificate, *rsa.PrivateKey, error) {
 	if len(pair.Certificate) == 0 {
-		return fmt.Errorf("no certificate in %s", source)
+		return nil, nil, fmt.Errorf("no certificate in %s", source)
 	}
 
 	cert, err := x509.ParseCertificate(pair.Certificate[0])
 	if err != nil {
-		return fmt.Errorf("parse certificate: %w", err)
+		return nil, nil, fmt.Errorf("parse certificate: %w", err)
 	}
 
 	key, ok := pair.PrivateKey.(*rsa.PrivateKey)
 	if !ok {
-		return fmt.Errorf("certificate key must be RSA")
+		return nil, nil, fmt.Errorf("certificate key must be RSA")
 	}
 
-	sp.cert = cert
-	sp.key = key
-
-	return nil
+	return cert, key, nil
 }
 
 // WithAttributeMap overrides the default Azure-AD attribute URIs used
@@ -117,20 +60,6 @@ func applyKeyPair(sp *SP, pair tls.Certificate, source string) error {
 func WithAttributeMap(m AttributeMap) Option {
 	return func(sp *SP) error {
 		sp.attributeMap = m
-		return nil
-	}
-}
-
-// WithOnAuthenticated registers the callback that receives the parsed
-// Subject after a successful assertion. Required.
-func WithOnAuthenticated(fn sso.OnAuthenticated[Payload]) Option {
-	return func(sp *SP) error {
-		if fn == nil {
-			return fmt.Errorf("OnAuthenticated must not be nil")
-		}
-
-		sp.onAuthenticated = fn
-
 		return nil
 	}
 }
