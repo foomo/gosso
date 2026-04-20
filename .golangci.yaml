@@ -1,0 +1,94 @@
+# https://golangci-lint.run/usage/configuration/
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+version: "2"
+
+run:
+  build-tags: [ safe ]
+  modules-download-mode: readonly
+
+linters:
+  default: all
+  disable:
+    # Project specific linters
+    - tparallel
+    - containedctx
+    # Discouraged linters
+    - noinlineerr
+    - embeddedstructfieldcheck
+    - cyclop
+    - depguard
+    - dogsled
+    - dupl
+    - dupword
+    - err113
+    - exhaustruct
+    - funlen
+    - ginkgolinter
+    - gochecknoglobals
+    - gochecknoinits
+    - gocognit
+    - gocyclo
+    - godot
+    - godox
+    - interfacebloat
+    - intrange
+    - ireturn
+    - lll
+    - maintidx
+    - testpackage
+    - nestif
+    - nlreturn
+    - mnd
+    - perfsprint
+    - prealloc
+    - protogetter
+    - sloglint
+    - tagalign
+    - tagliatelle
+    - unparam
+    - varnamelen
+    - wrapcheck
+    - zerologlint
+    # Deprecated linters
+    - wsl
+
+  settings:
+    paralleltest:
+      ignore-missing-subtests: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    gocritic:
+      disabled-checks:
+        - assignOp
+        - ifElseChain
+        - deprecatedComment
+    gomoddirectives:
+      replace-local: true
+    gosec:
+      severity: medium
+      confidence: medium
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - forbidigo
+          - unused
+          - gosec
+    paths:
+      - tmp
+      - examples
+formatters:
+  enable:
+    - gofmt
+    - goimports

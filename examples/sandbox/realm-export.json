@@ -1,0 +1,171 @@
+{
+  "realm": "gosso-sandbox",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": false,
+  "accessTokenLifespan": 300,
+  "accessCodeLifespan": 60,
+
+  "groups": [
+    { "name": "admins" },
+    { "name": "users" }
+  ],
+
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Admin",
+      "email": "alice@example.com",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "groups": [ "/admins" ],
+      "realmRoles": [ "default-roles-gosso-sandbox" ]
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "User",
+      "email": "bob@example.com",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "groups": [ "/users" ],
+      "realmRoles": [ "default-roles-gosso-sandbox" ]
+    }
+  ],
+
+  "clients": [
+    {
+      "clientId": "gosso-oidc",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "dev-secret-do-not-use",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [ "http://localhost:8080/oidc/callback" ],
+      "webOrigins": [ "http://localhost:8080" ],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:8080/*",
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+
+    {
+      "clientId": "http://localhost:8080/saml/metadata",
+      "name": "gosso-saml",
+      "enabled": true,
+      "protocol": "saml",
+      "baseUrl": "http://localhost:8080",
+      "adminUrl": "http://localhost:8080",
+      "redirectUris": [ "http://localhost:8080/saml/acs" ],
+      "frontchannelLogout": true,
+      "attributes": {
+        "saml.authnstatement": "true",
+        "saml.server.signature": "true",
+        "saml.assertion.signature": "true",
+        "saml.client.signature": "false",
+        "saml.encrypt": "false",
+        "saml.force.post.binding": "false",
+        "saml_force_name_id_format": "true",
+        "saml_name_id_format": "email",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml_assertion_consumer_url_post": "http://localhost:8080/saml/acs",
+        "saml_assertion_consumer_url_redirect": "http://localhost:8080/saml/acs",
+        "saml_single_logout_service_url_redirect": "http://localhost:8080/saml/slo"
+      },
+      "protocolMappers": [
+        {
+          "name": "objectidentifier",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "attribute.name": "http://schemas.microsoft.com/identity/claims/objectidentifier",
+            "attribute.nameformat": "URI Reference",
+            "user.attribute": "id",
+            "friendly.name": "objectidentifier"
+          }
+        },
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "attribute.name": "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+            "attribute.nameformat": "URI Reference",
+            "user.attribute": "email",
+            "friendly.name": "emailaddress"
+          }
+        },
+        {
+          "name": "givenname",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "attribute.name": "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname",
+            "attribute.nameformat": "URI Reference",
+            "user.attribute": "firstName",
+            "friendly.name": "givenname"
+          }
+        },
+        {
+          "name": "surname",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "attribute.name": "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname",
+            "attribute.nameformat": "URI Reference",
+            "user.attribute": "lastName",
+            "friendly.name": "surname"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "saml",
+          "protocolMapper": "saml-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "attribute.name": "http://schemas.microsoft.com/ws/2008/06/identity/claims/groups",
+            "attribute.nameformat": "URI Reference",
+            "full.path": "false",
+            "friendly.name": "groups",
+            "single": "false"
+          }
+        }
+      ]
+    }
+  ]
+}
