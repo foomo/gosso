@@ -59,7 +59,49 @@ mux.Handle("/oidc/logout", h.Logout)
      token
    - constructs a `Subject[Payload]` via the `ClaimMap`
    - invokes `OnAuthenticated`
-   - redirects to the stashed target
+   - invokes `OnRedirect` (if configured) to compute the final target
+   - redirects to the (possibly rewritten) target
+
+## Post-login redirect (`WithOnRedirect`)
+
+By default the callback redirects the browser to the `target` carried in the
+transit cookie (the `?target=` from `/login`, or `/` when absent). Supply
+`oidc.WithOnRedirect` to compute the final destination yourself:
+
+```go
+oidc.WithOnRedirect(func(
+    ctx context.Context,
+    w http.ResponseWriter,
+    r *http.Request,
+    sub sso.Subject[oidc.Payload],
+    target string,
+) (string, error) {
+    // Runs after OnAuthenticated succeeds. It receives the authenticated
+    // subject and the resolved (safe) target. Return a non-empty string to
+    // override the redirect destination; return "" to keep `target`.
+    if strings.HasPrefix(target, "/checkout") {
+        return target, nil // leave checkout logins untouched
+    }
+    return target + "?notice=cartMerged", nil
+}),
+```
+
+Why a separate hook rather than doing this in `OnAuthenticated`?
+
+- **It sees the `target`.** `OnAuthenticated` never receives the post-login
+  destination, so it cannot branch on *where* login was initiated.
+- **It owns the `ResponseWriter`.** A consumer can set additional cookies
+  (e.g. rebinding a shopping cart on login) before the redirect happens.
+
+Semantics:
+
+- Runs only after `OnAuthenticated` returns successfully.
+- Returning `""` keeps the default target; a non-empty string overrides it.
+- Returning an error aborts the callback (HTTP 500) — the redirect is not sent.
+- When the option is unset, behaviour is unchanged (redirect to `target`).
+
+The open-redirect guard still applies: `target` is always a safe relative path.
+It is your responsibility to keep any rewritten destination relative.
 
 ## Claims
 

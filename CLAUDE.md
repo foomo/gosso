@@ -46,6 +46,7 @@ Violating these requires explicit discussion — they're why the library exists:
 4. **Transit state ≠ session state.** The OIDC package uses a signed short-lived cookie `gosso_oidc_transit` to carry `state`/`nonce`/PKCE verifier between `/login` and `/callback`. Protocol plumbing, not a user session — carries no identity, deleted on first read.
 5. **Functional options via `github.com/foomo/go/options`.** `Option = options.OptionE[*SP]` / `[*RP]`; validation lives in each `With*`; `options.ApplyE` centralises error wrapping.
 6. **Open-redirect guard on `?target=`.** Both `/login` handlers accept a `target` query param; only relative URLs are honoured, others fall back to `/`.
+7. **Redirect decision separate from auth (OIDC).** `oidc.WithOnRedirect(func(ctx, w, r, sub, target) (finalTarget, err))` runs after `OnAuthenticated` and computes the post-login destination. It exists because `OnAuthenticated` never sees `target` (so it can't branch on *where* login was initiated) yet the consumer often needs to — and because it owns the ResponseWriter, it can set extra cookies before the redirect. Return `""` to keep `target`; an error aborts the callback. The `?target=` guard still applies; rewritten targets must stay relative.
 
 ## What is NOT in scope
 
