@@ -155,5 +155,20 @@ func (rp *RP) handleCallback(w http.ResponseWriter, r *http.Request) {
 		target = "/"
 	}
 
+	// The consumer may rewrite the redirect target (e.g. append a cart-merge
+	// notice) and set additional cookies. It branches on `target` — where login
+	// was initiated — which OnAuthenticated does not see.
+	if rp.onRedirect != nil {
+		finalTarget, redirectErr := rp.onRedirect(ctx, w, r, sub, target)
+		if redirectErr != nil {
+			fail("on-redirect", redirectErr, http.StatusInternalServerError, "redirect callback failed")
+			return
+		}
+
+		if finalTarget != "" {
+			target = finalTarget
+		}
+	}
+
 	http.Redirect(w, r, target, http.StatusFound)
 }
