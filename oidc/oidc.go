@@ -44,6 +44,7 @@ type RP struct {
 	httpClient            *http.Client
 	bootstrapTimeout      time.Duration
 	onAuthenticated       sso.OnAuthenticated[Payload]
+	onRedirect            OnRedirect
 	onLogout              sso.OnLogout
 	errorLogger           sso.ErrorLogger
 	logoutHintProvider    LogoutHintProvider

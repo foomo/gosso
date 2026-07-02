@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -150,6 +151,35 @@ type LogoutHintProvider func(*http.Request) string
 func WithLogoutHintProvider(fn LogoutHintProvider) Option {
 	return func(rp *RP) error {
 		rp.logoutHintProvider = fn
+		return nil
+	}
+}
+
+// OnRedirect computes the post-login redirect destination. It runs after a
+// successful OnAuthenticated, receiving the authenticated subject and the
+// resolved (safe) target from the transit state. Returning a non-empty string
+// overrides the redirect destination; returning "" keeps the default target.
+// Returning an error aborts the callback. It owns the ResponseWriter, so a
+// consumer may set additional cookies (e.g. rebinding a cart on login) before
+// the redirect happens.
+//
+// Keeping the redirect decision here — rather than inside OnAuthenticated —
+// lets the consumer branch on where login was initiated (the target), which
+// OnAuthenticated does not see.
+type OnRedirect func(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	sub sso.Subject[Payload],
+	target string,
+) (finalTarget string, err error)
+
+// WithOnRedirect registers a callback that computes the final post-login
+// redirect target. See OnRedirect. When unset, the callback redirects to the
+// transit target (or "/") unchanged.
+func WithOnRedirect(fn OnRedirect) Option {
+	return func(rp *RP) error {
+		rp.onRedirect = fn
 		return nil
 	}
 }
