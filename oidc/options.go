@@ -222,11 +222,12 @@ func WithBootstrapTimeout(d time.Duration) Option {
 	}
 }
 
-// WithIsInternalTestServer configures the client to work with a OpenID Connect server deployed at the same local cluster
-// relaxing the requirement to use https as transport protocol but to use http instead
-func WithIsInternalTestServer(isTestServer bool) Option {
+// WithDiscoveryBaseURL configures the client to work with a OpenID Connect server deployed at the same local cluster
+// relaxing the requirement to use https as transport protocol but to use http instead for the discovery phase
+// using discoveryBaseURL instead of issuerURL
+func WithDiscoveryBaseURL(discoveryBaseURL string) Option {
 	return func(rp *RP) error {
-		rp.isInternalTestServer = isTestServer
+		rp.discoveryBaseURL = discoveryBaseURL
 		return nil
 	}
 }

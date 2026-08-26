@@ -48,7 +48,7 @@ type RP struct {
 	onLogout              sso.OnLogout
 	errorLogger           sso.ErrorLogger
 	logoutHintProvider    LogoutHintProvider
-	isInternalTestServer  bool
+	discoveryBaseURL      string
 
 	// runtime
 	provider   *gooidc.Provider
@@ -138,7 +138,10 @@ func New(
 		return nil, err
 	}
 
-	if !rp.isInternalTestServer {
+	ctxTimeout, cancel := context.WithTimeout(ctx, rp.bootstrapTimeout)
+	defer cancel()
+
+	if len(rp.discoveryBaseURL) == 0 {
 		if err := requireSecureURL(issuerParsed, "issuer url"); err != nil {
 			return nil, err
 		}
@@ -146,19 +149,26 @@ func New(
 		if err := requireSecureURL(redirectParsed, "redirect url"); err != nil {
 			return nil, err
 		}
-	}
 
-	ctxTimeout, cancel := context.WithTimeout(ctx, rp.bootstrapTimeout)
-	defer cancel()
+		if err = rp.bootstrap(ctxTimeout, redirectParsed, rp.issuerURL); err != nil {
+			return nil, err
+		}
+	} else {
+		// Provider will be discovered with the discoveryBaseURL, but use issuerURL
+		// for future issuer validation.
+		ctxInsecure := gooidc.InsecureIssuerURLContext(ctxTimeout, rp.issuerURL)
 
-	if err := rp.bootstrap(ctxTimeout, redirectParsed); err != nil {
-		return nil, err
+		// Provider will be discovered with the discoveryBaseURL, but use issuerURL
+		// for future issuer validation.
+		if err = rp.bootstrap(ctxInsecure, redirectParsed, rp.discoveryBaseURL); err != nil {
+			return nil, err
+		}
 	}
 
 	return rp, nil
 }
 
-func (rp *RP) bootstrap(ctx context.Context, redirectParsed *url.URL) error {
+func (rp *RP) bootstrap(ctx context.Context, redirectParsed *url.URL, issuerURL string) error {
 	ctx = gooidc.ClientContext(ctx, rp.httpClient)
 
 	discoverCtx, discoverSpan := telemetry.Tracer().Start(ctx, "oidc.discover",
