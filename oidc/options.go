@@ -222,6 +222,15 @@ func WithBootstrapTimeout(d time.Duration) Option {
 	}
 }
 
+// WithIsInternalTestServer configures the client to work with a OpenID Connect server deployed at the same local cluster
+// relaxing the requirement to use https as transport protocol but to use http instead
+func WithIsInternalTestServer(isTestServer bool) Option {
+	return func(rp *RP) error {
+		rp.isInternalTestServer = isTestServer
+		return nil
+	}
+}
+
 // requireSecureURL rejects non-HTTPS URLs unless the host is a loopback
 // address, which is allowed over plain HTTP for local development.
 func requireSecureURL(u *url.URL, label string) error {

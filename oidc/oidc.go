@@ -48,6 +48,7 @@ type RP struct {
 	onLogout              sso.OnLogout
 	errorLogger           sso.ErrorLogger
 	logoutHintProvider    LogoutHintProvider
+	isInternalTestServer  bool
 
 	// runtime
 	provider   *gooidc.Provider
@@ -62,6 +63,7 @@ type RP struct {
 // (bounded by the bootstrap timeout).
 //
 // The mandatory parameters are:
+//   - ctx: context of the calling service
 //   - issuerURL: OIDC issuer; all endpoints are populated from
 //     `<issuer>/.well-known/openid-configuration` unless overridden.
 //     Must be HTTPS; loopback hosts are allowed over HTTP for local
@@ -75,6 +77,7 @@ type RP struct {
 //   - onAuthenticated: callback invoked after a successful code
 //     exchange + ID token verification.
 func New(
+	ctx context.Context,
 	issuerURL string,
 	clientID string,
 	clientSecret string,
@@ -92,10 +95,6 @@ func New(
 		return nil, fmt.Errorf("parse issuer url: %w", err)
 	}
 
-	if err := requireSecureURL(issuerParsed, "issuer url"); err != nil {
-		return nil, err
-	}
-
 	if clientID == "" {
 		return nil, fmt.Errorf("client id must not be empty")
 	}
@@ -111,10 +110,6 @@ func New(
 
 	if redirectParsed.Scheme == "" || redirectParsed.Host == "" {
 		return nil, fmt.Errorf("redirect url must be absolute: %s", redirectURL)
-	}
-
-	if err := requireSecureURL(redirectParsed, "redirect url"); err != nil {
-		return nil, err
 	}
 
 	if len(transitSigningKey) < minTransitSigningKeyBytes {
@@ -143,10 +138,20 @@ func New(
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), rp.bootstrapTimeout)
+	if !rp.isInternalTestServer {
+		if err := requireSecureURL(issuerParsed, "issuer url"); err != nil {
+			return nil, err
+		}
+
+		if err := requireSecureURL(redirectParsed, "redirect url"); err != nil {
+			return nil, err
+		}
+	}
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, rp.bootstrapTimeout)
 	defer cancel()
 
-	if err := rp.bootstrap(ctx, redirectParsed); err != nil {
+	if err := rp.bootstrap(ctxTimeout, redirectParsed); err != nil {
 		return nil, err
 	}
 
