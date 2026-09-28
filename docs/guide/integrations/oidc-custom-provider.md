@@ -15,7 +15,7 @@ validator pattern.
 | --- | --- | --- |
 | **Consumer → IdP** | Redirect URI (callback) | `redirectURL` argument to `oidc.New`; exact string match at the IdP. `https://app.example.com/oidc/callback` |
 | Consumer → IdP | Post-logout redirect URI | `WithPostLogoutRedirectURL`; pre-register on most IdPs |
-| Consumer → IdP | Requested scopes | `openid profile email` unconditionally; `WithExtraScopes("offline_access", "groups", …)` for the rest |
+| Consumer → IdP | Requested scopes | `openid profile email` by default, replaceable with `WithScopes` (`openid` is always kept) — check the IdP's `scopes_supported`, an unoffered scope fails the whole request, and `rp.UnsupportedScopes()` names any after `oidc.New`; `WithExtraScopes("offline_access", "groups", …)` for the rest |
 | Consumer → IdP | Response type | `code` (fixed) |
 | Consumer → IdP | Grant types | `authorization_code`, optionally `refresh_token` |
 | Consumer → IdP | PKCE | `code_challenge_method=S256` (fixed) |

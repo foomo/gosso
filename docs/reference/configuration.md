@@ -47,7 +47,8 @@ column.
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `WithExtraScopes(...string)` | | Added to `{openid, profile, email}`. Use `offline_access` for refresh tokens. |
+| `WithScopes(...string)` | `{openid, profile, email}` | Replaces the default scope set; `openid` is always kept. For IdPs that reject a scope they do not offer, e.g. `email`. |
+| `WithExtraScopes(...string)` | | Added to the scope set. Use `offline_access` for refresh tokens. |
 | `WithClaimMap(ClaimMap)` | `StandardClaimMap` | Claim-name → `Subject` field mapping. |
 | `WithUserInfo(bool)` | `false` | Fetch `/userinfo` after token exchange; claims override ID token. |
 | `WithIssuerValidator(fn)` | strict eq | Custom issuer check (e.g. for Entra ID multi-tenant). |

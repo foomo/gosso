@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
@@ -32,7 +33,9 @@ type RP struct {
 	clientID              string
 	clientSecret          string
 	redirectURL           string
+	baseScopes            []string
 	extraScopes           []string
+	unsupportedScopes     []string
 	claimMap              ClaimMap
 	fetchUserInfo         bool
 	issuerValidator       func(iss string) error
@@ -216,27 +219,61 @@ func (rp *RP) bootstrap(ctx context.Context, redirectParsed *url.URL, issuerURL 
 		secure:         redirectParsed.Scheme == "https",
 	}
 
-	// Resolve end_session_endpoint from the provider discovery document.
+	// Resolve end_session_endpoint and scopes_supported from the provider
+	// discovery document.
 	var claims struct {
-		EndSession string `json:"end_session_endpoint"`
+		EndSession      string   `json:"end_session_endpoint"`
+		ScopesSupported []string `json:"scopes_supported"`
 	}
 	if err := provider.Claims(&claims); err == nil {
 		rp.endSession = claims.EndSession
+		rp.unsupportedScopes = unsupportedScopes(rp.oauth2Cfg.Scopes, claims.ScopesSupported)
 	}
 
 	return nil
 }
 
+// UnsupportedScopes returns the requested scopes the IdP's discovery
+// document does not list in scopes_supported, or nil when it lists them
+// all or publishes no list. Log it at startup: an IdP may reject the whole
+// authorization request over a single unoffered scope, and report that
+// only on its own error page.
+func (rp *RP) UnsupportedScopes() []string {
+	return rp.unsupportedScopes
+}
+
+func unsupportedScopes(requested, supported []string) []string {
+	// scopes_supported is only RECOMMENDED by OIDC Discovery; without it
+	// there is nothing to check against
+	if len(supported) == 0 {
+		return nil
+	}
+
+	var out []string
+
+	for _, scope := range requested {
+		if !slices.Contains(supported, scope) {
+			out = append(out, scope)
+		}
+	}
+
+	return out
+}
+
+// defaultScopes are requested unless WithScopes replaces them.
+var defaultScopes = []string{gooidc.ScopeOpenID, "profile", "email"}
+
 func (rp *RP) scopes() []string {
-	base := []string{gooidc.ScopeOpenID, "profile", "email"}
-	if len(rp.extraScopes) == 0 {
-		return base
+	base := defaultScopes
+	if rp.baseScopes != nil {
+		// openid is what makes the request an OIDC one; it is not optional
+		base = append([]string{gooidc.ScopeOpenID}, rp.baseScopes...)
 	}
 
 	seen := make(map[string]struct{}, len(base)+len(rp.extraScopes))
 
 	out := make([]string, 0, len(base)+len(rp.extraScopes))
-	for _, s := range append(base, rp.extraScopes...) {
+	for _, s := range slices.Concat(base, rp.extraScopes) {
 		if s == "" {
 			continue
 		}
