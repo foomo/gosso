@@ -161,8 +161,6 @@ func New(
 		// for future issuer validation.
 		ctxInsecure := gooidc.InsecureIssuerURLContext(ctxTimeout, rp.issuerURL)
 
-		// Provider will be discovered with the discoveryBaseURL, but use issuerURL
-		// for future issuer validation.
 		if err = rp.bootstrap(ctxInsecure, redirectParsed, rp.discoveryBaseURL); err != nil {
 			return nil, err
 		}
@@ -171,14 +169,16 @@ func New(
 	return rp, nil
 }
 
-func (rp *RP) bootstrap(ctx context.Context, redirectParsed *url.URL, issuerURL string) error {
+// bootstrap discovers the provider from discoveryURL, which is the issuer
+// unless WithDiscoveryBaseURL names another address for it.
+func (rp *RP) bootstrap(ctx context.Context, redirectParsed *url.URL, discoveryURL string) error {
 	ctx = gooidc.ClientContext(ctx, rp.httpClient)
 
 	discoverCtx, discoverSpan := telemetry.Tracer().Start(ctx, "oidc.discover",
 		trace.WithAttributes(oidcProtocolAttr),
 	)
 
-	provider, err := gooidc.NewProvider(discoverCtx, rp.issuerURL)
+	provider, err := gooidc.NewProvider(discoverCtx, discoveryURL)
 	if err != nil {
 		discoverSpan.RecordError(err)
 		discoverSpan.End()
