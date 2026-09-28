@@ -235,6 +235,7 @@ func newOIDCRP(store *sessionStore) (*oidc.RP, error) {
 	)
 	for i := 0; i < 20; i++ {
 		rp, err = oidc.New(
+			context.Background(),
 			issuer,
 			oidcClientID,
 			oidcClientSecret,
