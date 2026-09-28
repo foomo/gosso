@@ -72,32 +72,40 @@ func TestWithBootstrapTimeout_Positive(t *testing.T) {
 	require.Error(t, err)
 }
 
+// scope names the scope tests below assert on
+const (
+	scopeOpenID        = "openid"
+	scopeProfile       = "profile"
+	scopeEmail         = "email"
+	scopeOfflineAccess = "offline_access"
+)
+
 func TestWithScopes(t *testing.T) {
 	t.Parallel()
 
 	t.Run("default set", func(t *testing.T) {
 		t.Parallel()
 
-		rp, err := apply(t, WithExtraScopes("offline_access"))
+		rp, err := apply(t, WithExtraScopes(scopeOfflineAccess))
 		require.NoError(t, err)
-		assert.Equal(t, []string{"openid", "profile", "email", "offline_access"}, rp.scopes())
+		assert.Equal(t, []string{scopeOpenID, scopeProfile, scopeEmail, scopeOfflineAccess}, rp.scopes())
 	})
 
 	t.Run("replaced set keeps openid and the extra scopes", func(t *testing.T) {
 		t.Parallel()
 
 		// e.g. an IdP that rejects the whole request over `email`
-		rp, err := apply(t, WithScopes("profile"), WithExtraScopes("offline_access"))
+		rp, err := apply(t, WithScopes(scopeProfile), WithExtraScopes(scopeOfflineAccess))
 		require.NoError(t, err)
-		assert.Equal(t, []string{"openid", "profile", "offline_access"}, rp.scopes())
+		assert.Equal(t, []string{scopeOpenID, scopeProfile, scopeOfflineAccess}, rp.scopes())
 	})
 
 	t.Run("openid listed explicitly is not duplicated", func(t *testing.T) {
 		t.Parallel()
 
-		rp, err := apply(t, WithScopes("openid", "profile"))
+		rp, err := apply(t, WithScopes(scopeOpenID, scopeProfile))
 		require.NoError(t, err)
-		assert.Equal(t, []string{"openid", "profile"}, rp.scopes())
+		assert.Equal(t, []string{scopeOpenID, scopeProfile}, rp.scopes())
 	})
 
 	t.Run("an empty replacement still requests openid", func(t *testing.T) {
@@ -105,7 +113,7 @@ func TestWithScopes(t *testing.T) {
 
 		rp, err := apply(t, WithScopes())
 		require.NoError(t, err)
-		assert.Equal(t, []string{"openid"}, rp.scopes())
+		assert.Equal(t, []string{scopeOpenID}, rp.scopes())
 	})
 
 	t.Run("the default set is not aliased", func(t *testing.T) {
@@ -116,18 +124,18 @@ func TestWithScopes(t *testing.T) {
 		second, err := apply(t, WithExtraScopes("b"))
 		require.NoError(t, err)
 
-		assert.Equal(t, []string{"openid", "profile", "email", "a"}, first.scopes())
-		assert.Equal(t, []string{"openid", "profile", "email", "b"}, second.scopes())
+		assert.Equal(t, []string{scopeOpenID, scopeProfile, scopeEmail, "a"}, first.scopes())
+		assert.Equal(t, []string{scopeOpenID, scopeProfile, scopeEmail, "b"}, second.scopes())
 	})
 }
 
 func TestUnsupportedScopes(t *testing.T) {
 	t.Parallel()
 
-	requested := []string{"openid", "profile", "email", "offline_access"}
+	requested := []string{scopeOpenID, scopeProfile, scopeEmail, scopeOfflineAccess}
 
-	assert.Equal(t, []string{"email"},
-		unsupportedScopes(requested, []string{"openid", "profile", "address", "offline_access"}))
-	assert.Nil(t, unsupportedScopes(requested, []string{"openid", "profile", "email", "offline_access"}))
+	assert.Equal(t, []string{scopeEmail},
+		unsupportedScopes(requested, []string{scopeOpenID, scopeProfile, "address", scopeOfflineAccess}))
+	assert.Nil(t, unsupportedScopes(requested, []string{scopeOpenID, scopeProfile, scopeEmail, scopeOfflineAccess}))
 	assert.Nil(t, unsupportedScopes(requested, nil), "no scopes_supported, nothing to check")
 }

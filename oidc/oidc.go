@@ -169,6 +169,15 @@ func New(
 	return rp, nil
 }
 
+// UnsupportedScopes returns the requested scopes the IdP's discovery
+// document does not list in scopes_supported, or nil when it lists them
+// all or publishes no list. Log it at startup: an IdP may reject the whole
+// authorization request over a single unoffered scope, and report that
+// only on its own error page.
+func (rp *RP) UnsupportedScopes() []string {
+	return rp.unsupportedScopes
+}
+
 // bootstrap discovers the provider from discoveryURL, which is the issuer
 // unless WithDiscoveryBaseURL names another address for it.
 func (rp *RP) bootstrap(ctx context.Context, redirectParsed *url.URL, discoveryURL string) error {
@@ -231,15 +240,6 @@ func (rp *RP) bootstrap(ctx context.Context, redirectParsed *url.URL, discoveryU
 	}
 
 	return nil
-}
-
-// UnsupportedScopes returns the requested scopes the IdP's discovery
-// document does not list in scopes_supported, or nil when it lists them
-// all or publishes no list. Log it at startup: an IdP may reject the whole
-// authorization request over a single unoffered scope, and report that
-// only on its own error page.
-func (rp *RP) UnsupportedScopes() []string {
-	return rp.unsupportedScopes
 }
 
 func unsupportedScopes(requested, supported []string) []string {

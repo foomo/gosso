@@ -40,7 +40,7 @@ func TestNew_DiscoveryBaseURL(t *testing.T) {
 			"token_endpoint":         issuer + "/protocol/openid-connect/token",
 			"jwks_uri":               issuer + "/protocol/openid-connect/certs",
 			"end_session_endpoint":   issuer + "/protocol/openid-connect/logout",
-			"scopes_supported":       []string{"openid", "profile"},
+			"scopes_supported":       []string{scopeOpenID, scopeProfile},
 		})
 	}))
 	t.Cleanup(idp.Close)
@@ -62,5 +62,5 @@ func TestNew_DiscoveryBaseURL(t *testing.T) {
 	assert.Equal(t, []string{"/realms/customer/.well-known/openid-configuration"}, requested)
 	assert.Equal(t, issuer+"/protocol/openid-connect/auth", rp.oauth2Cfg.Endpoint.AuthURL, "browser-facing endpoints come from the document")
 	assert.Equal(t, issuer+"/protocol/openid-connect/logout", rp.endSession)
-	assert.Equal(t, []string{"email"}, rp.UnsupportedScopes())
+	assert.Equal(t, []string{scopeEmail}, rp.UnsupportedScopes())
 }
