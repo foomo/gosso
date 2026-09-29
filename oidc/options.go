@@ -20,9 +20,22 @@ const minTransitSigningKeyBytes = 32
 // Option configures an RP.
 type Option = options.OptionE[*RP]
 
+// WithScopes replaces the default {openid, profile, email} scope set.
+// `openid` is always requested, whether listed or not. Use it for an IdP
+// that rejects the whole authorization request over a scope it does not
+// offer — for example one without the `email` scope, whose email then
+// arrives in a claim WithClaimMap has to name. WithExtraScopes still
+// appends to the replaced set.
+func WithScopes(scopes ...string) Option {
+	return func(rp *RP) error {
+		rp.baseScopes = append([]string{}, scopes...)
+		return nil
+	}
+}
+
 // WithExtraScopes appends scopes to the default {openid, profile, email}
-// set. Most commonly used to request `offline_access` for refresh
-// tokens.
+// set, or to the set WithScopes replaced it with. Most commonly used to
+// request `offline_access` for refresh tokens.
 func WithExtraScopes(scopes ...string) Option {
 	return func(rp *RP) error {
 		rp.extraScopes = append(rp.extraScopes, scopes...)
@@ -218,6 +231,16 @@ func WithBootstrapTimeout(d time.Duration) Option {
 
 		rp.bootstrapTimeout = d
 
+		return nil
+	}
+}
+
+// WithDiscoveryBaseURL configures the client to work with a OpenID Connect server deployed at the same local cluster
+// relaxing the requirement to use https as transport protocol but to use http instead for the discovery phase
+// using discoveryBaseURL instead of issuerURL
+func WithDiscoveryBaseURL(discoveryBaseURL string) Option {
+	return func(rp *RP) error {
+		rp.discoveryBaseURL = discoveryBaseURL
 		return nil
 	}
 }
