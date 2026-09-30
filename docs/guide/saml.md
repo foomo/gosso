@@ -89,9 +89,21 @@ When configured and returning a non-empty `nameID`, `/saml/logout`:
 
 1. Calls the hint provider (reads from your session).
 2. Fires `OnLogout` so you can destroy your session.
-3. Builds a SAML `LogoutRequest` redirect via
-   `ServiceProvider.MakeRedirectLogoutRequest(nameID, "")`.
+3. Builds a SAML `LogoutRequest` for the redirect binding, carrying the
+   `SessionIndex` when the provider returned one.
 4. Redirects the browser to the IdP's SLO endpoint.
+
+The `sessionIndex` the provider returns sets the scope of the logout:
+
+| Provider returns          | `LogoutRequest`              | Asks the IdP to end                         |
+|---------------------------|------------------------------|---------------------------------------------|
+| `nameID, sessionIndex`    | `NameID` + `SessionIndex`    | only that session                           |
+| `nameID, ""`              | `NameID` only                | all of the principal's sessions with this SP |
+| `"", _`                   | none — local-only logout     | nothing                                     |
+
+How far an IdP honours the `SessionIndex` is up to the IdP. The
+decision is per request, so a consumer can offer both — e.g. a "log out
+everywhere" action that returns an empty `sessionIndex`.
 
 **The hint provider runs *before* `OnLogout`** — because consumers
 typically read `NameID`/`SessionIndex` from the same session they are

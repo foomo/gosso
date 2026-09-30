@@ -118,9 +118,10 @@ non-empty `NameID`, `/saml/logout`:
 
 1. Pulls `(NameID, SessionIndex)` from your session via the provider.
 2. Fires `OnLogout` so you can destroy your session.
-3. Builds a `LogoutRequest` via `crewjam/saml`'s
-   `MakeRedirectLogoutRequest` and redirects the browser to Entra's
-   `SingleLogoutService`.
+3. Builds a `LogoutRequest` for the redirect binding — with the
+   `SessionIndex` when the provider returned one (see
+   [Single Logout](../saml#single-logout) for the scope that sets) —
+   and redirects the browser to Entra's `SingleLogoutService`.
 4. Entra terminates its SSO session and POSTs a `LogoutResponse` to
    `/saml/slo`.
 5. `/saml/slo` redirects to `WithPostLogoutRedirectURL` (`/` by

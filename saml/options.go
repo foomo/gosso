@@ -86,7 +86,16 @@ func WithErrorLogger(fn sso.ErrorLogger) Option {
 
 // SLOHintProvider returns the NameID and SessionIndex required to build
 // a SAML LogoutRequest. Typically the consumer extracts them from its
-// own session. Returning an empty NameID skips the IdP-side SLO.
+// own session, and its return value decides the scope of the logout:
+//
+//   - nameID and sessionIndex: the LogoutRequest carries both, asking
+//     the IdP to end only the session the SessionIndex names.
+//   - nameID with an empty sessionIndex: the LogoutRequest carries no
+//     SessionIndex, which SAML defines as all of the principal's
+//     sessions with this SP.
+//   - an empty nameID: no IdP-side SLO; the logout is local-only.
+//
+// How far an IdP honours the SessionIndex is up to the IdP.
 type SLOHintProvider func(*http.Request) (nameID, sessionIndex string)
 
 // WithSLOHintProvider registers the callback used by the logout handler
