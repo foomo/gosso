@@ -2,6 +2,6 @@
 # https://mise-tools.jdx.dev/tools/lefthook
 lefthook = "2.1.5"
 # https://mise-tools.jdx.dev/tools/golangci-lint
-golangci-lint = "2.11.4"
+golangci-lint = "2.14.0"
 # https://mise-tools.jdx.dev/tools/bun
 bun = "latest"
