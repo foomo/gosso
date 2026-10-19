@@ -36,7 +36,9 @@ func (rp *RP) handleCallback(w http.ResponseWriter, r *http.Request) {
 		callbackDuration.Record(ctx, time.Since(start).Milliseconds())
 	}()
 
-	fail := func(stage string, err error, status int, msg string) {
+	// failUntrusted answers failures before the state check: the transit
+	// cookie's login context is not bound to this login yet.
+	failUntrusted := func(stage string, err error, status int, msg string) {
 		rp.fail(ctx, r, callbackCompleted, stage, err)
 		http.Error(w, msg, status)
 	}
@@ -48,18 +50,33 @@ func (rp *RP) handleCallback(w http.ResponseWriter, r *http.Request) {
 	rp.transit.delete(w)
 
 	if err != nil {
-		fail("transit-read", err, http.StatusBadRequest, "invalid callback state")
+		failUntrusted("transit-read", err, http.StatusBadRequest, "invalid callback state")
 		return
 	}
 
 	got := r.URL.Query().Get("state")
 	if subtle.ConstantTimeCompare([]byte(got), []byte(td.State)) != 1 {
-		fail("state-mismatch", fmt.Errorf("state mismatch"), http.StatusBadRequest, "state mismatch")
+		failUntrusted("state-mismatch", fmt.Errorf("state mismatch"), http.StatusBadRequest, "state mismatch")
 		return
 	}
 
+	// fail answers every later failure; OnLoginError may turn it into a
+	// redirect.
+	fail := func(stage string, err error, status int, msg string) {
+		rp.fail(ctx, r, callbackCompleted, stage, err)
+
+		if rp.onLoginError != nil {
+			if redirect := rp.onLoginError(ctx, w, r, td.Context, stage, err); redirect != "" {
+				http.Redirect(w, r, redirect, http.StatusFound)
+				return
+			}
+		}
+
+		http.Error(w, msg, status)
+	}
+
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
-		fail("idp-error", fmt.Errorf("idp error: %s", errParam), http.StatusBadGateway, "idp error")
+		fail(StageIDPError, fmt.Errorf("idp error: %s", errParam), http.StatusBadGateway, "idp error")
 		return
 	}
 
@@ -139,6 +156,13 @@ func (rp *RP) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail("build-subject", err, http.StatusInternalServerError, "build subject failed")
 		return
+	}
+
+	// The login context reaches OnAuthenticated and OnRedirect only once
+	// the state check passed: before that it is not bound to this login.
+	if len(td.Context) > 0 {
+		ctx = withLoginContext(ctx, td.Context)
+		r = r.WithContext(ctx)
 	}
 
 	if err := rp.onAuthenticated(ctx, w, r, sub); err != nil {
