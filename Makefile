@@ -166,6 +166,12 @@ sandbox.run:
 	@echo "〉starting sandbox demo at http://localhost:8080"
 	@cd examples && go run ./sandbox
 
+.PHONY: sandbox.app
+## Run the native-client demo against the sandbox (ARGS=-demo-reuse)
+sandbox.app:
+	@echo "〉starting the native-client demo against http://localhost:8080"
+	@cd examples && go run ./nativeapp $(ARGS)
+
 .PHONY: sandbox.certs
 ## Regenerate the sandbox SP cert pair (dev only)
 sandbox.certs:
