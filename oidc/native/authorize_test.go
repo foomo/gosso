@@ -14,14 +14,16 @@ import (
 
 	sso "github.com/foomo/gosso"
 	"github.com/foomo/gosso/oidc"
+	"github.com/foomo/gosso/oidc/native/repository"
+	"github.com/foomo/gosso/oidc/native/repository/store"
 )
 
 func validHooks() Hooks {
 	return Hooks{
-		Authenticate: func(context.Context, *http.Request, sso.Subject[oidc.Payload]) (Attributes, error) {
+		Authenticate: func(context.Context, *http.Request, sso.Subject[oidc.Payload]) (store.Attributes, error) {
 			return nil, nil
 		},
-		Mint: func(context.Context, Session) (Tokens, error) { return Tokens{}, nil },
+		Mint: func(context.Context, store.Session) (Tokens, error) { return Tokens{}, nil },
 	}
 }
 
@@ -29,14 +31,17 @@ func TestNew_Validation(t *testing.T) {
 	t.Parallel()
 
 	type args struct {
-		store   Store
-		hooks   Hooks
-		clients []Client
-		key     []byte
+		codes    repository.Code
+		sessions repository.Session
+		hooks    Hooks
+		clients  []Client
+		key      []byte
 	}
 
+	codes, sessions := newRepositories(t)
+
 	valid := func() args {
-		return args{store: NewMemoryStore(), hooks: validHooks(), clients: testClients(), key: testKey}
+		return args{codes: codes, sessions: sessions, hooks: validHooks(), clients: testClients(), key: testKey}
 	}
 
 	cases := map[string]struct {
@@ -44,7 +49,8 @@ func TestNew_Validation(t *testing.T) {
 		wantErr string
 	}{
 		"valid":               {mutate: func(*args) {}},
-		"nil store":           {mutate: func(a *args) { a.store = nil }, wantErr: "store"},
+		"nil codes":           {mutate: func(a *args) { a.codes = nil }, wantErr: "code repository"},
+		"nil sessions":        {mutate: func(a *args) { a.sessions = nil }, wantErr: "session repository"},
 		"nil authenticate":    {mutate: func(a *args) { a.hooks.Authenticate = nil }, wantErr: "Authenticate"},
 		"nil mint":            {mutate: func(a *args) { a.hooks.Mint = nil }, wantErr: "Mint"},
 		"no clients":          {mutate: func(a *args) { a.clients = nil }, wantErr: "client"},
@@ -65,7 +71,7 @@ func TestNew_Validation(t *testing.T) {
 			a := valid()
 			tc.mutate(&a)
 
-			_, err := New(a.store, a.hooks, a.clients, a.key)
+			_, err := New(a.codes, a.sessions, a.hooks, a.clients, a.key)
 			if tc.wantErr == "" {
 				require.NoError(t, err)
 				return
@@ -83,7 +89,8 @@ func TestAttach_RequiresWrappers(t *testing.T) {
 	f := newFixture(t) // a real RP to attach
 
 	newBroker := func() *Broker {
-		b, err := New(NewMemoryStore(), validHooks(), testClients(), testKey)
+		codes, sessions := newRepositories(t)
+		b, err := New(codes, sessions, validHooks(), testClients(), testKey)
 		require.NoError(t, err)
 
 		return b
@@ -225,7 +232,8 @@ func TestAuthorize_LoginInitFails(t *testing.T) {
 	f := newFixture(t)
 	longRedirect := appRedirect + "?" + strings.Repeat("p", 3500)
 
-	b, err := New(NewMemoryStore(), validHooks(), []Client{{ID: clientIOS, RedirectURIs: []string{longRedirect}}}, testKey)
+	codes, sessions := newRepositories(t)
+	b, err := New(codes, sessions, validHooks(), []Client{{ID: clientIOS, RedirectURIs: []string{longRedirect}}}, testKey)
 	require.NoError(t, err)
 
 	b.OnAuthenticated(nil)
@@ -253,7 +261,8 @@ func TestAuthorize_LoginInitFails(t *testing.T) {
 func TestAuthorize_BeforeAttach(t *testing.T) {
 	t.Parallel()
 
-	b, err := New(NewMemoryStore(), validHooks(), testClients(), testKey)
+	codes, sessions := newRepositories(t)
+	b, err := New(codes, sessions, validHooks(), testClients(), testKey)
 	require.NoError(t, err)
 
 	h := b.Handlers()

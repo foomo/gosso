@@ -8,6 +8,8 @@ import (
 
 	sso "github.com/foomo/gosso"
 	"github.com/foomo/gosso/oidc"
+	"github.com/foomo/gosso/oidc/native/repository"
+	"github.com/foomo/gosso/oidc/native/repository/store"
 )
 
 // maxRotateAttempts bounds the retries after a lost compare-and-swap.
@@ -48,8 +50,8 @@ func (b *Broker) refreshTokenGrant(w http.ResponseWriter, r *http.Request, rp *o
 	h := hashToken(secret)
 
 	for range maxRotateAttempts {
-		s, err := b.store.GetSession(ctx, id)
-		if errors.Is(err, ErrNotFound) {
+		s, err := b.sessions.Get(ctx, id)
+		if errors.Is(err, repository.ErrNotFound) {
 			g.fail(ctx, http.StatusBadRequest, errInvalidGrant, "session-unknown", "refresh token invalid", nil)
 			return
 		} else if err != nil {
@@ -111,7 +113,7 @@ func (g *refreshGrant) succeed(ctx context.Context, resp tokenResponse) {
 }
 
 func (g *refreshGrant) deleteSession(ctx context.Context, id string) {
-	if err := g.b.store.DeleteSession(ctx, id); err != nil {
+	if err := g.b.sessions.Delete(ctx, id); err != nil {
 		g.b.logError(g.r, "native-token-store-delete-session", err)
 	}
 }
@@ -124,7 +126,7 @@ func (g *refreshGrant) deleteSession(ctx context.Context, id string) {
 // every exit path: the IdP may already have retired the old one. The work
 // runs detached from the request, so an app that hangs up mid-refresh gets
 // a clean rollback instead of a half-done rotation.
-func (g *refreshGrant) rotate(reqCtx context.Context, s Session, h string) bool {
+func (g *refreshGrant) rotate(reqCtx context.Context, s store.Session, h string) bool {
 	b := g.b
 	now := b.now()
 
@@ -142,7 +144,7 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s Session, h string) bool 
 	claimed.PreviousRefreshHash = h
 	claimed.RotatedAt = now
 
-	if err := b.store.RotateSession(ctx, claimed, h); errors.Is(err, ErrConflict) {
+	if err := b.sessions.Rotate(ctx, claimed, h); errors.Is(err, repository.ErrConflict) {
 		return false
 	} else if err != nil {
 		g.fail(ctx, http.StatusInternalServerError, errServerError, "store-rotate-session", "", err)
@@ -151,17 +153,17 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s Session, h string) bool 
 
 	// rollback undoes the claim so the app's retry with the same token
 	// still matches, and keeps a new IdP token (nil: none was issued).
-	rollback := func(idpToken *EncryptedToken) {
+	rollback := func(idpToken *store.EncryptedToken) {
 		orig := s
 		if idpToken != nil {
 			orig.IDPRefreshToken = *idpToken
 		}
 
-		err := b.store.RotateSession(ctx, orig, claimed.RefreshHash)
+		err := b.sessions.Rotate(ctx, orig, claimed.RefreshHash)
 
 		switch {
 		case err == nil:
-		case errors.Is(err, ErrConflict):
+		case errors.Is(err, repository.ErrConflict):
 			// a concurrent grace hit rotated meanwhile: its secret stands,
 			// but the session must still get the new IdP token
 			if idpToken != nil {
@@ -258,14 +260,14 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s Session, h string) bool 
 // the secret is rotated once more, so this response, which completes last,
 // carries the current refresh token. The previous secret and its window
 // are kept, so a late duplicate of the original token still passes.
-func (g *refreshGrant) persist(ctx context.Context, final Session, expected string, resp tokenResponse, sub sso.Subject[oidc.Payload], attrs Attributes, sealed EncryptedToken, now time.Time) (tokenResponse, error) {
+func (g *refreshGrant) persist(ctx context.Context, final store.Session, expected string, resp tokenResponse, sub sso.Subject[oidc.Payload], attrs store.Attributes, sealed store.EncryptedToken, now time.Time) (tokenResponse, error) {
 	for range maxRotateAttempts {
-		err := g.b.store.RotateSession(ctx, final, expected)
-		if !errors.Is(err, ErrConflict) {
+		err := g.b.sessions.Rotate(ctx, final, expected)
+		if !errors.Is(err, repository.ErrConflict) {
 			return resp, err
 		}
 
-		cur, err := g.b.store.GetSession(ctx, final.ID)
+		cur, err := g.b.sessions.Get(ctx, final.ID)
 		if err != nil {
 			return resp, err
 		}
@@ -291,10 +293,10 @@ func (g *refreshGrant) persist(ctx context.Context, final Session, expected stri
 
 // storeIDPToken writes a new IdP refresh token onto the session's current
 // state, whatever its secret.
-func (g *refreshGrant) storeIDPToken(ctx context.Context, id string, idpToken EncryptedToken) {
+func (g *refreshGrant) storeIDPToken(ctx context.Context, id string, idpToken store.EncryptedToken) {
 	for range maxRotateAttempts {
-		cur, err := g.b.store.GetSession(ctx, id)
-		if errors.Is(err, ErrNotFound) {
+		cur, err := g.b.sessions.Get(ctx, id)
+		if errors.Is(err, repository.ErrNotFound) {
 			return
 		} else if err != nil {
 			g.b.logError(g.r, "native-token-store-idp-token", err)
@@ -303,10 +305,10 @@ func (g *refreshGrant) storeIDPToken(ctx context.Context, id string, idpToken En
 
 		cur.IDPRefreshToken = idpToken
 
-		err = g.b.store.RotateSession(ctx, cur, cur.RefreshHash)
+		err = g.b.sessions.Rotate(ctx, cur, cur.RefreshHash)
 		if err == nil {
 			return
-		} else if !errors.Is(err, ErrConflict) {
+		} else if !errors.Is(err, repository.ErrConflict) {
 			g.b.logError(g.r, "native-token-store-idp-token", err)
 			return
 		}
@@ -319,7 +321,7 @@ func (g *refreshGrant) storeIDPToken(ctx context.Context, id string, idpToken En
 // concurrent duplicate of a refresh in flight. It rotates the current
 // secret and issues a fresh token set without calling the IdP; the
 // previous secret and the window it runs in are left as they are.
-func (g *refreshGrant) graceRotate(ctx context.Context, s Session) bool {
+func (g *refreshGrant) graceRotate(ctx context.Context, s store.Session) bool {
 	b := g.b
 	now := b.now()
 
@@ -335,7 +337,7 @@ func (g *refreshGrant) graceRotate(ctx context.Context, s Session) bool {
 	next.RefreshHash = hashToken(newSecret)
 	next.LastUsedAt = now
 
-	if err := b.store.RotateSession(ctx, next, s.RefreshHash); errors.Is(err, ErrConflict) {
+	if err := b.sessions.Rotate(ctx, next, s.RefreshHash); errors.Is(err, repository.ErrConflict) {
 		return false
 	} else if err != nil {
 		g.fail(ctx, http.StatusInternalServerError, errServerError, "store-rotate-session", "", err)
@@ -344,7 +346,7 @@ func (g *refreshGrant) graceRotate(ctx context.Context, s Session) bool {
 
 	resp, err := b.issue(ctx, next, newSecret)
 	if err != nil {
-		if rerr := b.store.RotateSession(ctx, s, next.RefreshHash); rerr != nil && !errors.Is(rerr, ErrConflict) {
+		if rerr := b.sessions.Rotate(ctx, s, next.RefreshHash); rerr != nil && !errors.Is(rerr, repository.ErrConflict) {
 			b.logError(g.r, "native-token-rollback", rerr)
 		}
 
@@ -358,7 +360,7 @@ func (g *refreshGrant) graceRotate(ctx context.Context, s Session) bool {
 	return true
 }
 
-func applyRefresh(s *Session, sub sso.Subject[oidc.Payload], attrs Attributes, sealed EncryptedToken, now time.Time) {
+func applyRefresh(s *store.Session, sub sso.Subject[oidc.Payload], attrs store.Attributes, sealed store.EncryptedToken, now time.Time) {
 	s.Subject = projectSubject(sub)
 	s.Attributes = cloneAttributes(attrs)
 	s.IDPRefreshToken = sealed

@@ -148,16 +148,16 @@ godocs:
 ### Sandbox
 
 .PHONY: sandbox.up
-## Start the keycloak sandbox
+## Start the sandbox (keycloak + mongo)
 sandbox.up:
-	@echo "〉starting keycloak"
+	@echo "〉starting keycloak and mongo"
 	@docker compose -f examples/sandbox/docker-compose.yaml up -d
 	@echo "〉keycloak admin: http://localhost:8081  (admin / admin)"
 
 .PHONY: sandbox.down
-## Stop the keycloak sandbox and remove volumes
+## Stop the sandbox (keycloak + mongo) and remove volumes
 sandbox.down:
-	@echo "〉stopping keycloak"
+	@echo "〉stopping keycloak and mongo"
 	@docker compose -f examples/sandbox/docker-compose.yaml down -v
 
 .PHONY: sandbox.run

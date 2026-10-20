@@ -86,7 +86,8 @@ func TestFlow_UnknownIdPErrorBecomesServerError(t *testing.T) {
 func TestOnLoginError_Deregistered(t *testing.T) {
 	t.Parallel()
 
-	b, err := New(NewMemoryStore(), validHooks(), testClients(), testKey)
+	codes, sessions := newRepositories(t)
+	b, err := New(codes, sessions, validHooks(), testClients(), testKey)
 	require.NoError(t, err)
 
 	onLoginError := b.OnLoginError(nil)
@@ -122,10 +123,9 @@ func TestFlow_NoIDPRefreshToken(t *testing.T) {
 	loc := f.login(t, "st", hashToken(strings.Repeat("v", 43)))
 	assert.Equal(t, appRedirect+"?error=server_error&state=st", loc.String())
 
-	f.store.mu.Lock()
-	defer f.store.mu.Unlock()
-
-	assert.Empty(t, f.store.codes)
+	n, err := f.codes.Collection().CountAll(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, n, "no code stored")
 }
 
 func TestFlow_AuthenticateFails(t *testing.T) {

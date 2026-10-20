@@ -18,7 +18,10 @@ import (
 
 	sso "github.com/foomo/gosso"
 	"github.com/foomo/gosso/internal/fakeidp"
+	"github.com/foomo/gosso/internal/mongotest"
 	"github.com/foomo/gosso/oidc"
+	"github.com/foomo/gosso/oidc/native/repository"
+	"github.com/foomo/gosso/oidc/native/repository/store"
 )
 
 const (
@@ -65,13 +68,14 @@ func (c *testClock) Advance(d time.Duration) {
 // on one server: /login, /callback (web RP) and /app/authorize,
 // /app/token, /app/revoke (broker).
 type fixture struct {
-	idp    *fakeidp.IdP
-	store  *MemoryStore
-	clock  *testClock
-	broker *Broker
-	rp     *oidc.RP
-	server *httptest.Server
-	client *http.Client
+	idp      *fakeidp.IdP
+	codes    *repository.BaseCode
+	sessions *repository.BaseSession
+	clock    *testClock
+	broker   *Broker
+	rp       *oidc.RP
+	server   *httptest.Server
+	client   *http.Client
 
 	mu               sync.Mutex
 	authenticateErr  error
@@ -84,22 +88,38 @@ type fixture struct {
 func newFixture(t *testing.T, opts ...Option) *fixture {
 	t.Helper()
 
-	return newFixtureWithStore(t, nil, opts...)
+	return newFixtureWithSessions(t, nil, opts...)
 }
 
-// newFixtureWithStore is newFixture with the broker's store wrapped around
-// the fixture's MemoryStore (wrap nil = the MemoryStore itself).
-func newFixtureWithStore(t *testing.T, wrap func(*MemoryStore) Store, opts ...Option) *fixture {
+// newRepositories returns MongoDB repositories on a fresh database.
+func newRepositories(t *testing.T) (*repository.BaseCode, *repository.BaseSession) {
+	t.Helper()
+
+	p := mongotest.Persistor(t)
+
+	codes, err := repository.NewDefaultCode(p)
+	require.NoError(t, err)
+
+	sessions, err := repository.NewDefaultSession(p)
+	require.NoError(t, err)
+
+	return codes, sessions
+}
+
+// newFixtureWithSessions is newFixture with the broker's session repository
+// wrapped by wrap (nil = unwrapped), e.g. to inject failures.
+func newFixtureWithSessions(t *testing.T, wrap func(repository.Session) repository.Session, opts ...Option) *fixture {
 	t.Helper()
 
 	f := &fixture{
 		idp:   fakeidp.New(t, "rp-client", "rp-secret"),
-		store: NewMemoryStore(),
 		clock: newTestClock(),
 	}
 
+	f.codes, f.sessions = newRepositories(t)
+
 	hooks := Hooks{
-		Authenticate: func(_ context.Context, _ *http.Request, sub sso.Subject[oidc.Payload]) (Attributes, error) {
+		Authenticate: func(_ context.Context, _ *http.Request, sub sso.Subject[oidc.Payload]) (store.Attributes, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
 
@@ -109,9 +129,9 @@ func newFixtureWithStore(t *testing.T, wrap func(*MemoryStore) Store, opts ...Op
 
 			f.authenticated = append(f.authenticated, sub)
 
-			return Attributes{"email": sub.Email, "logins": strings.Repeat("x", len(f.authenticated))}, nil
+			return store.Attributes{"email": sub.Email, "logins": strings.Repeat("x", len(f.authenticated))}, nil
 		},
-		Mint: func(_ context.Context, s Session) (Tokens, error) {
+		Mint: func(_ context.Context, s store.Session) (Tokens, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
 
@@ -123,12 +143,12 @@ func newFixtureWithStore(t *testing.T, wrap func(*MemoryStore) Store, opts ...Op
 		},
 	}
 
-	var store Store = f.store
+	var sessions repository.Session = f.sessions
 	if wrap != nil {
-		store = wrap(f.store)
+		sessions = wrap(f.sessions)
 	}
 
-	b, err := New(store, hooks, testClients(), testKey, append([]Option{WithClock(f.clock.Now)}, opts...)...)
+	b, err := New(f.codes, sessions, hooks, testClients(), testKey, append([]Option{WithClock(f.clock.Now)}, opts...)...)
 	require.NoError(t, err)
 
 	f.broker = b

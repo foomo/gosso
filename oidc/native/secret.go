@@ -10,6 +10,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+
+	"github.com/foomo/gosso/oidc/native/repository/store"
 )
 
 // encryptionKeyBytes is the AES-256 key length.
@@ -125,22 +127,22 @@ func keyID(key []byte) string {
 
 // seal encrypts plaintext bound to aad. The random nonce prefixes the
 // ciphertext.
-func (s *sealer) seal(plaintext, aad string) (EncryptedToken, error) {
+func (s *sealer) seal(plaintext, aad string) (store.EncryptedToken, error) {
 	aead := s.keys[s.primaryID]
 
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return EncryptedToken{}, fmt.Errorf("random nonce: %w", err)
+		return store.EncryptedToken{}, fmt.Errorf("random nonce: %w", err)
 	}
 
-	return EncryptedToken{
+	return store.EncryptedToken{
 		KeyID:      s.primaryID,
 		Ciphertext: aead.Seal(nonce, nonce, []byte(plaintext), []byte(aad)),
 	}, nil
 }
 
 // open decrypts t, which must have been sealed with the same aad.
-func (s *sealer) open(t EncryptedToken, aad string) (string, error) {
+func (s *sealer) open(t store.EncryptedToken, aad string) (string, error) {
 	aead, ok := s.keys[t.KeyID]
 	if !ok {
 		return "", fmt.Errorf("unknown encryption key id %q", t.KeyID)

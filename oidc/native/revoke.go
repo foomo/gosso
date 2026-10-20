@@ -8,6 +8,8 @@ import (
 
 	"github.com/foomo/gosso/internal/telemetry"
 	"github.com/foomo/gosso/oidc"
+	"github.com/foomo/gosso/oidc/native/repository"
+	"github.com/foomo/gosso/oidc/native/repository/store"
 )
 
 // handleRevoke ends the refresh session a refresh token belongs to (RFC
@@ -46,9 +48,9 @@ func (b *Broker) handleRevoke(w http.ResponseWriter, r *http.Request, _ *oidc.RP
 		return
 	}
 
-	s, err := b.store.GetSession(ctx, id)
+	s, err := b.sessions.Get(ctx, id)
 	if err != nil {
-		if !errors.Is(err, ErrNotFound) {
+		if !errors.Is(err, repository.ErrNotFound) {
 			b.logError(r, "native-revoke-get-session", err)
 		}
 
@@ -59,17 +61,17 @@ func (b *Broker) handleRevoke(w http.ResponseWriter, r *http.Request, _ *oidc.RP
 		return
 	}
 
-	if err := b.store.DeleteSession(ctx, s.ID); err != nil {
+	if err := b.sessions.Delete(ctx, s.ID); err != nil {
 		b.logError(r, "native-revoke-delete-session", err)
 	}
 }
 
 // matchesSession reports whether h is the session's current refresh hash,
 // or its previous one within the rotation grace window.
-func (b *Broker) matchesSession(s Session, h string) bool {
+func (b *Broker) matchesSession(s store.Session, h string) bool {
 	return h == s.RefreshHash || b.inGrace(s, h)
 }
 
-func (b *Broker) inGrace(s Session, h string) bool {
+func (b *Broker) inGrace(s store.Session, h string) bool {
 	return s.PreviousRefreshHash != "" && h == s.PreviousRefreshHash && !b.now().After(s.RotatedAt.Add(b.rotationGrace))
 }

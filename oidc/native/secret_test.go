@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/foomo/gosso/oidc/native/repository/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -154,7 +155,7 @@ func TestSealer(t *testing.T) {
 		_, err = s.open(enc, "aad")
 		require.Error(t, err)
 
-		_, err = s.open(EncryptedToken{KeyID: enc.KeyID, Ciphertext: []byte{1}}, "aad")
+		_, err = s.open(store.EncryptedToken{KeyID: enc.KeyID, Ciphertext: []byte{1}}, "aad")
 		require.Error(t, err, "shorter than the nonce")
 	})
 

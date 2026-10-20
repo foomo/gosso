@@ -10,6 +10,7 @@ import (
 
 	sso "github.com/foomo/gosso"
 	"github.com/foomo/gosso/oidc"
+	"github.com/foomo/gosso/oidc/native/repository/store"
 )
 
 // Login-context keys the broker puts on a native login.
@@ -142,7 +143,7 @@ func (b *Broker) issueCode(ctx context.Context, r *http.Request, n nativeLogin, 
 		return "", err
 	}
 
-	if err := b.store.PutCode(ctx, Code{
+	if err := b.codes.Put(ctx, store.Code{
 		Hash:            hashToken(code),
 		ClientID:        n.clientID,
 		RedirectURI:     n.redirectURI,

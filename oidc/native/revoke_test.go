@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/foomo/gosso/oidc/native/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,8 +44,8 @@ func TestRevoke(t *testing.T) {
 		assert.Equal(t, http.StatusOK, res.status)
 		assert.Empty(t, res.body)
 
-		_, err := f.store.GetSession(t.Context(), id)
-		require.ErrorIs(t, err, ErrNotFound)
+		_, err := f.sessions.Get(t.Context(), id)
+		require.ErrorIs(t, err, repository.ErrNotFound)
 	})
 
 	t.Run("previous token within grace", func(t *testing.T) {
@@ -53,19 +54,19 @@ func TestRevoke(t *testing.T) {
 		f := newFixture(t)
 		rt, id := issue(t, f)
 
-		s, err := f.store.GetSession(t.Context(), id)
+		s, err := f.sessions.Get(t.Context(), id)
 		require.NoError(t, err)
 
 		next := s
 		next.PreviousRefreshHash = s.RefreshHash
 		next.RefreshHash = "rotated"
 		next.RotatedAt = f.clock.Now()
-		require.NoError(t, f.store.RotateSession(t.Context(), next, s.RefreshHash))
+		require.NoError(t, f.sessions.Rotate(t.Context(), next, s.RefreshHash))
 
 		assert.Equal(t, http.StatusOK, revoke(t, f, url.Values{"token": {rt}, "client_id": {clientIOS}}).status)
 
-		_, err = f.store.GetSession(t.Context(), id)
-		require.ErrorIs(t, err, ErrNotFound)
+		_, err = f.sessions.Get(t.Context(), id)
+		require.ErrorIs(t, err, repository.ErrNotFound)
 	})
 
 	keeps := map[string]func(rt, id string) url.Values{
@@ -93,7 +94,7 @@ func TestRevoke(t *testing.T) {
 			res := revoke(t, f, form(rt, id))
 			assert.Equal(t, http.StatusOK, res.status)
 
-			_, err := f.store.GetSession(t.Context(), id)
+			_, err := f.sessions.Get(t.Context(), id)
 			require.NoError(t, err, "session kept")
 		})
 	}

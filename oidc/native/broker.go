@@ -16,12 +16,14 @@ import (
 
 	sso "github.com/foomo/gosso"
 	"github.com/foomo/gosso/oidc"
+	"github.com/foomo/gosso/oidc/native/repository"
 )
 
 // Broker serves the native-app endpoints on top of an oidc.RP. Build it
 // with New, pass its wrapped hooks to oidc.New, then Attach the RP.
 type Broker struct {
-	store          Store
+	codes          repository.Code
+	sessions       repository.Session
 	hooks          Hooks
 	clients        map[string]Client
 	sealer         *sealer
@@ -40,11 +42,16 @@ type Broker struct {
 	rp atomic.Pointer[oidc.RP]
 }
 
-// New builds a Broker. clients are the registered native apps;
-// encryptionKey (exactly 32 bytes) encrypts the stored IdP refresh tokens.
-func New(store Store, hooks Hooks, clients []Client, encryptionKey []byte, opts ...Option) (*Broker, error) {
-	if store == nil {
-		return nil, errors.New("store must not be nil")
+// New builds a Broker. codes and sessions persist one-time codes and
+// refresh sessions; clients are the registered native apps; encryptionKey
+// (exactly 32 bytes) encrypts the stored IdP refresh tokens.
+func New(codes repository.Code, sessions repository.Session, hooks Hooks, clients []Client, encryptionKey []byte, opts ...Option) (*Broker, error) {
+	if codes == nil {
+		return nil, errors.New("code repository must not be nil")
+	}
+
+	if sessions == nil {
+		return nil, errors.New("session repository must not be nil")
 	}
 
 	if hooks.Authenticate == nil {
@@ -61,7 +68,8 @@ func New(store Store, hooks Hooks, clients []Client, encryptionKey []byte, opts 
 	}
 
 	b := &Broker{
-		store:         store,
+		codes:         codes,
+		sessions:      sessions,
 		hooks:         hooks,
 		clients:       registered,
 		codeTTL:       defaultCodeTTL,

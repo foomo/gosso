@@ -7,11 +7,11 @@ require (
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/crewjam/saml v0.5.1
 	github.com/foomo/go v0.16.0
+	github.com/foomo/keel v0.31.0
 	github.com/foomo/keel/persistence/mongo v0.33.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/russellhaering/goxmldsig v1.4.0
 	github.com/stretchr/testify v1.12.1
-	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/mongodb v0.44.0
 	go.mongodb.org/mongo-driver/v2 v2.9.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0
@@ -38,7 +38,6 @@ require (
 	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/fbiville/markdown-table-formatter v0.3.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/foomo/keel v0.31.0 // indirect
 	github.com/foomo/mongo-lock v0.2.0 // indirect
 	github.com/foomo/opentelemetry-go v0.5.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
@@ -67,6 +66,7 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.7 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
+	github.com/testcontainers/testcontainers-go v0.44.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect

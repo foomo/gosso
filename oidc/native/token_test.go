@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/foomo/gosso/oidc/native/repository/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,13 +26,13 @@ func (f *fixture) seedCode(t *testing.T) string {
 	sealed, err := f.broker.sealer.seal("idp-rt", sealAAD("alice"))
 	require.NoError(t, err)
 
-	require.NoError(t, f.store.PutCode(t.Context(), Code{
+	require.NoError(t, f.codes.Put(t.Context(), store.Code{
 		Hash:            hashToken(code),
 		ClientID:        clientIOS,
 		RedirectURI:     appRedirect,
 		CodeChallenge:   hashToken(testVerifier),
-		Subject:         Subject{ExternalID: "alice", Email: "alice@example.com"},
-		Attributes:      Attributes{"k": "v"},
+		Subject:         store.Subject{ExternalID: "alice", Email: "alice@example.com"},
+		Attributes:      store.Attributes{"k": "v"},
 		IDPRefreshToken: sealed,
 		ExpiresAt:       f.clock.Now().Add(defaultCodeTTL),
 	}))
@@ -80,12 +81,12 @@ func TestToken_AuthorizationCode(t *testing.T) {
 		id, secret, _ := strings.Cut(rt, ".")
 		assert.Equal(t, "at-"+id, res.str("access_token"))
 
-		s, err := f.store.GetSession(t.Context(), id)
+		s, err := f.sessions.Get(t.Context(), id)
 		require.NoError(t, err)
 		assert.Equal(t, hashToken(secret), s.RefreshHash)
 		assert.Equal(t, clientIOS, s.ClientID)
 		assert.Equal(t, "alice", s.Subject.ExternalID)
-		assert.Equal(t, Attributes{"k": "v"}, s.Attributes)
+		assert.Equal(t, store.Attributes{"k": "v"}, s.Attributes)
 		assert.True(t, s.ExpiresAt.Equal(f.clock.Now().Add(defaultSessionTTL)))
 		assert.True(t, s.CreatedAt.Equal(f.clock.Now()))
 
@@ -181,9 +182,8 @@ func TestToken_AuthorizationCode(t *testing.T) {
 		f.setMintErr(errHook)
 		assertOAuthError(t, f.post(t, "/app/token", codeForm(f.seedCode(t))), http.StatusInternalServerError, errServerError)
 
-		f.store.mu.Lock()
-		defer f.store.mu.Unlock()
-
-		assert.Empty(t, f.store.sessions, "no session left behind")
+		n, err := f.sessions.Collection().CountAll(t.Context())
+		require.NoError(t, err)
+		assert.Zero(t, n, "no session left behind")
 	})
 }

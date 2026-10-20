@@ -69,7 +69,8 @@ func TestOptions(t *testing.T) {
 func TestNew_Defaults(t *testing.T) {
 	t.Parallel()
 
-	b, err := New(NewMemoryStore(), validHooks(), testClients(), testKey)
+	codes, sessions := newRepositories(t)
+	b, err := New(codes, sessions, validHooks(), testClients(), testKey)
 	require.NoError(t, err)
 	assert.Equal(t, 60*time.Second, b.codeTTL)
 	assert.Equal(t, 90*24*time.Hour, b.sessionTTL)

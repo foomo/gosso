@@ -12,14 +12,15 @@
 // still decides whether the session lives on.
 //
 // Unlike the rest of gosso this package is stateful: codes and refresh
-// sessions live behind the Store interface (NewMemoryStore, or the
-// mongostore subpackage). Refresh secrets and codes are stored hashed; the
-// IdP refresh token is stored encrypted with AES-256-GCM.
+// sessions are persisted through the repository.Code and repository.Session
+// interfaces, implemented on MongoDB (keel's persistor) by the repository
+// package. Refresh secrets and codes are stored hashed; the IdP refresh
+// token is stored encrypted with AES-256-GCM.
 //
 // Wiring order: the RP needs the broker's wrapped hooks, and the broker
 // needs the RP, so build the broker first and attach the RP last:
 //
-//	b, err := native.New(store, hooks, clients, key)
+//	b, err := native.New(codes, sessions, hooks, clients, key)
 //	rp, err := oidc.New(ctx, issuer, id, secret, callbackURL, transitKey,
 //		b.OnAuthenticated(webOnAuth),
 //		oidc.WithExtraScopes("offline_access"),

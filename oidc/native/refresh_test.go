@@ -13,15 +13,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/foomo/gosso/internal/fakeidp"
+	"github.com/foomo/gosso/oidc/native/repository"
+	"github.com/foomo/gosso/oidc/native/repository/store"
 )
 
-func sessionOf(t *testing.T, f *fixture, rt string) (Session, error) {
+func sessionOf(t *testing.T, f *fixture, rt string) (store.Session, error) {
 	t.Helper()
 
 	id, _, ok := cutToken(rt)
 	require.True(t, ok, rt)
 
-	return f.store.GetSession(t.Context(), id)
+	return f.sessions.Get(t.Context(), id)
 }
 
 func TestToken_Refresh(t *testing.T) {
@@ -69,7 +71,7 @@ func TestToken_Refresh(t *testing.T) {
 	require.Len(t, subs, 2, "login + refresh")
 	assert.Equal(t, "alice", subs[1].ExternalID)
 	assert.Equal(t, idpAfter, subs[1].Raw.RefreshToken)
-	assert.Equal(t, Attributes{"email": "alice@example.com", "logins": "xx"}, after.Attributes)
+	assert.Equal(t, store.Attributes{"email": "alice@example.com", "logins": "xx"}, after.Attributes)
 
 	// the old token still works inside the grace window
 	assert.Equal(t, http.StatusOK, f.refresh(t, rt).status)
@@ -90,7 +92,7 @@ func TestToken_RefreshReuseOutsideGrace(t *testing.T) {
 	assertOAuthError(t, f.refresh(t, a), http.StatusBadRequest, errInvalidGrant)
 
 	_, err := sessionOf(t, f, b)
-	require.ErrorIs(t, err, ErrNotFound, "reuse revokes the session")
+	require.ErrorIs(t, err, repository.ErrNotFound, "reuse revokes the session")
 	assertOAuthError(t, f.refresh(t, b), http.StatusBadRequest, errInvalidGrant)
 }
 
@@ -133,7 +135,7 @@ func TestToken_RefreshRejectedByIdP(t *testing.T) {
 	assertOAuthError(t, f.refresh(t, rt), http.StatusBadRequest, errInvalidGrant)
 
 	_, err := sessionOf(t, f, rt)
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, repository.ErrNotFound)
 }
 
 func TestToken_RefreshTransientFailureKeepsToken(t *testing.T) {
@@ -207,7 +209,7 @@ func TestToken_RefreshExpiredSession(t *testing.T) {
 	assertOAuthError(t, f.refresh(t, rt), http.StatusBadRequest, errInvalidGrant)
 
 	_, err := sessionOf(t, f, rt)
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, repository.ErrNotFound)
 	assert.Zero(t, f.idp.RefreshCalls())
 }
 
@@ -406,8 +408,10 @@ func TestToken_RefreshRetryAfterRollbackConflict(t *testing.T) {
 func TestToken_RefreshPersistFailureKeepsToken(t *testing.T) {
 	t.Parallel()
 
-	// RotateSession #1 is the claim, #2 the persist of the refreshed state
-	f := newFixtureWithStore(t, func(m *MemoryStore) Store { return &faultyStore{MemoryStore: m, failAt: 2} })
+	// Rotate #1 is the claim, #2 the persist of the refreshed state
+	f := newFixtureWithSessions(t, func(r repository.Session) repository.Session {
+		return &faultySessions{Session: r, failAt: 2}
+	})
 	a := f.fullLogin(t)
 
 	assertOAuthError(t, f.refresh(t, a), http.StatusServiceUnavailable, errTemporarilyUnavailable)
@@ -421,7 +425,7 @@ func TestToken_RefreshPersistFailureKeepsToken(t *testing.T) {
 func TestToken_RefreshClientGoneKeepsToken(t *testing.T) {
 	t.Parallel()
 
-	f := newFixtureWithStore(t, func(m *MemoryStore) Store { return ctxStore{MemoryStore: m} })
+	f := newFixture(t) // MongoDB honours context cancellation, so a lost detach would fail here
 	a := f.fullLogin(t)
 
 	s, err := sessionOf(t, f, a)
@@ -452,7 +456,7 @@ func TestToken_RefreshClientGoneKeepsToken(t *testing.T) {
 
 	// the broker finishes in the background: secret rolled back, IdP token kept
 	require.Eventually(t, func() bool {
-		cur, err := f.store.GetSession(t.Context(), s.ID)
+		cur, err := f.sessions.Get(t.Context(), s.ID)
 		return err == nil && cur.RefreshHash == s.RefreshHash && idpTokenOf(t, f, a) != before
 	}, 3*time.Second, 20*time.Millisecond)
 

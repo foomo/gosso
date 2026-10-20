@@ -12,6 +12,8 @@ import (
 
 	"github.com/foomo/gosso/internal/telemetry"
 	"github.com/foomo/gosso/oidc"
+	"github.com/foomo/gosso/oidc/native/repository"
+	"github.com/foomo/gosso/oidc/native/repository/store"
 )
 
 // maxFormBytes bounds token and revoke request bodies.
@@ -32,7 +34,7 @@ type tokenResponse struct {
 
 // issue mints the consumer's tokens for s and formats the response; secret
 // is the session's current refresh secret.
-func (b *Broker) issue(ctx context.Context, s Session, secret string) (tokenResponse, error) {
+func (b *Broker) issue(ctx context.Context, s store.Session, secret string) (tokenResponse, error) {
 	tokens, err := b.hooks.Mint(ctx, s)
 	if err != nil {
 		return tokenResponse{}, fmt.Errorf("mint: %w", err)
@@ -131,8 +133,8 @@ func (b *Broker) authorizationCodeGrant(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// From here on the code is consumed, whatever the outcome.
-	c, err := b.store.TakeCode(ctx, hashToken(code))
-	if errors.Is(err, ErrNotFound) {
+	c, err := b.codes.Take(ctx, hashToken(code))
+	if errors.Is(err, repository.ErrNotFound) {
 		fail(http.StatusBadRequest, errInvalidGrant, "code-unknown", "code invalid", nil)
 		return
 	} else if err != nil {
@@ -169,7 +171,7 @@ func (b *Broker) authorizationCodeGrant(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	s := Session{
+	s := store.Session{
 		ID:              id,
 		ClientID:        client.ID,
 		RefreshHash:     hashToken(secret),
@@ -181,14 +183,14 @@ func (b *Broker) authorizationCodeGrant(w http.ResponseWriter, r *http.Request, 
 		ExpiresAt:       now.Add(b.sessionTTL),
 	}
 
-	if err := b.store.CreateSession(ctx, s); err != nil {
+	if err := b.sessions.Create(ctx, s); err != nil {
 		fail(http.StatusInternalServerError, errServerError, "store-create-session", "", err)
 		return
 	}
 
 	resp, err := b.issue(ctx, s, secret)
 	if err != nil {
-		if derr := b.store.DeleteSession(ctx, s.ID); derr != nil {
+		if derr := b.sessions.Delete(ctx, s.ID); derr != nil {
 			b.logError(r, "native-token-store-delete-session", derr)
 		}
 

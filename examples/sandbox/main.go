@@ -1,6 +1,6 @@
 // Sandbox demo: one binary that mounts both the SAML and OIDC adapters
 // against a local Keycloak. Run `make sandbox.up` first to start
-// Keycloak, then `make sandbox.run` to start this app on
+// Keycloak and MongoDB, then `make sandbox.run` to start this app on
 // http://localhost:8080.
 package main
 
@@ -17,11 +17,14 @@ import (
 	"sync"
 	"time"
 
+	keelmongo "github.com/foomo/keel/persistence/mongo"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	sso "github.com/foomo/gosso"
 	"github.com/foomo/gosso/oidc"
 	"github.com/foomo/gosso/oidc/native"
+	nativerepository "github.com/foomo/gosso/oidc/native/repository"
+	nativestore "github.com/foomo/gosso/oidc/native/repository/store"
 	"github.com/foomo/gosso/saml"
 )
 
@@ -41,6 +44,9 @@ const (
 	nativeRedirectURI   = "http://127.0.0.1:8090/callback"
 	nativeEncryptionKey = "sandbox-native-key-not-for-prod!" // exactly 32 bytes
 	nativeAccessTTL     = 2 * time.Minute                    // short, so refresh is quick to demo
+
+	// MongoDB from docker-compose, where the broker keeps codes and sessions.
+	mongoURI = "mongodb://localhost:27017/gosso_sandbox"
 )
 
 // subject is the normalised view we stash in the in-memory session.
@@ -112,10 +118,10 @@ func (s *sessionStore) clear(w http.ResponseWriter, r *http.Request) {
 
 // accessToken is what an opaque native access token stands for.
 type accessToken struct {
-	SessionID  string            `json:"session_id"`
-	Subject    native.Subject    `json:"subject"`
-	Attributes native.Attributes `json:"attributes"`
-	ExpiresAt  time.Time         `json:"expires_at"`
+	SessionID  string                 `json:"session_id"`
+	Subject    nativestore.Subject    `json:"subject"`
+	Attributes nativestore.Attributes `json:"attributes"`
+	ExpiresAt  time.Time              `json:"expires_at"`
 }
 
 // accessTokenStore holds the opaque access tokens the broker's Mint hook
@@ -129,7 +135,7 @@ func newAccessTokenStore() *accessTokenStore {
 	return &accessTokenStore{m: make(map[string]accessToken)}
 }
 
-func (a *accessTokenStore) mint(_ context.Context, s native.Session) (native.Tokens, error) {
+func (a *accessTokenStore) mint(_ context.Context, s nativestore.Session) (native.Tokens, error) {
 	token := randomID()
 
 	a.mu.Lock()
@@ -172,7 +178,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("saml init: %v", err)
 	}
-	oidcRP, broker, err := newOIDCRP(store, accessTokens)
+	persistor, err := keelmongo.New(context.Background(), mongoURI)
+	if err != nil {
+		log.Fatalf("mongo: %v", err)
+	}
+	oidcRP, broker, err := newOIDCRP(store, accessTokens, persistor)
 	if err != nil {
 		log.Fatalf("oidc init: %v", err)
 	}
@@ -278,17 +288,28 @@ func newSAMLSP(store *sessionStore) (*saml.SP, error) {
 	return nil, err
 }
 
-func newOIDCRP(store *sessionStore, accessTokens *accessTokenStore) (*oidc.RP, *native.Broker, error) {
+func newOIDCRP(store *sessionStore, accessTokens *accessTokenStore, persistor *keelmongo.Persistor) (*oidc.RP, *native.Broker, error) {
 	issuer := fmt.Sprintf("%s/realms/%s", keycloakBaseURL, realm)
+
+	codes, err := nativerepository.NewDefaultCode(persistor)
+	if err != nil {
+		return nil, nil, fmt.Errorf("native codes: %w", err)
+	}
+
+	sessions, err := nativerepository.NewDefaultSession(persistor)
+	if err != nil {
+		return nil, nil, fmt.Errorf("native sessions: %w", err)
+	}
 
 	// The broker comes first: the RP needs its wrapped hooks, and the
 	// broker gets the RP through Attach once it exists.
 	broker, err := native.New(
-		native.NewMemoryStore(),
+		codes,
+		sessions,
 		native.Hooks{
-			Authenticate: func(_ context.Context, _ *http.Request, _ sso.Subject[oidc.Payload]) (native.Attributes, error) {
+			Authenticate: func(_ context.Context, _ *http.Request, _ sso.Subject[oidc.Payload]) (nativestore.Attributes, error) {
 				// a real service would upsert the customer here
-				return native.Attributes{"loggedInAt": time.Now().Format(time.RFC3339)}, nil
+				return nativestore.Attributes{"loggedInAt": time.Now().Format(time.RFC3339)}, nil
 			},
 			Mint: accessTokens.mint,
 		},

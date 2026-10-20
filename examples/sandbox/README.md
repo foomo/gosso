@@ -7,7 +7,7 @@ without standing up anything yourself.
 ## Run it
 
 ```sh
-# 1. start Keycloak (port 8081, admin / admin)
+# 1. start Keycloak (port 8081, admin / admin) and MongoDB (port 27017)
 make sandbox.up
 
 # 2. start the demo app (port 8080)
@@ -99,7 +99,7 @@ make sandbox.down
 
 | File                     | Purpose                                                                  |
 | ------------------------ | ------------------------------------------------------------------------ |
-| `docker-compose.yaml`    | Keycloak container, imports the realm JSON on first boot.                |
+| `docker-compose.yaml`    | Keycloak container (imports the realm JSON on first boot) and MongoDB for the native broker. |
 | `realm-export.json`      | Pre-provisioned realm (users, groups, SAML + OIDC clients).              |
 | `certs/sp.{crt,key}`     | Dev-only SP cert. Do **not** use outside this sandbox. Regenerate with `make sandbox.certs`. |
 | `main.go`                | The demo app: in-memory session, both protocols and the native broker mounted. |
