@@ -14,7 +14,8 @@ Use it when:
   client and callback, and never talks to the IdP itself.
 
 Unlike the rest of gosso, the broker is **stateful**: it stores one-time
-codes and refresh sessions behind a `native.Store`.
+codes and refresh sessions through `repository.Code` and
+`repository.Session`, implemented on MongoDB.
 
 ## Flow
 
@@ -56,7 +57,7 @@ The RP needs the broker's wrapped hooks, and the broker needs the RP, so
 build the broker first and attach the RP last:
 
 ```go
-b, err := native.New(store, hooks, []native.Client{
+b, err := native.New(codes, sessions, hooks, []native.Client{
     {ID: "app-ios", RedirectURIs: []string{"com.example.app:/oauth2redirect"}},
 }, encryptionKey) // exactly 32 bytes
 if err != nil { return err }
@@ -93,12 +94,12 @@ unchanged.
 ```go
 native.Hooks{
     // Runs after a native login AND after every successful refresh.
-    Authenticate: func(ctx context.Context, r *http.Request, sub sso.Subject[oidc.Payload]) (native.Attributes, error) {
+    Authenticate: func(ctx context.Context, r *http.Request, sub sso.Subject[oidc.Payload]) (store.Attributes, error) {
         id, err := customers.Upsert(ctx, sub.ExternalID, sub.Email)
-        return native.Attributes{"customerID": id}, err
+        return store.Attributes{"customerID": id}, err
     },
     // Decides the access-token format: a signed JWT, an opaque token, ...
-    Mint: func(ctx context.Context, s native.Session) (native.Tokens, error) {
+    Mint: func(ctx context.Context, s store.Session) (native.Tokens, error) {
         jwt, err := signUserJWT(s.Subject, s.Attributes, time.Hour)
         return native.Tokens{AccessToken: jwt, ExpiresIn: time.Hour}, err
     },
@@ -182,7 +183,7 @@ Token and revoke responses are JSON with `Cache-Control: no-store` and
 | IdP rejects the refresh (`invalid_grant`) | `400 invalid_grant`, session deleted |
 | IdP unreachable or 5xx on refresh, subject changed | `503 temporarily_unavailable`, session kept |
 | `Authenticate` or `Mint` fails on refresh | `503 temporarily_unavailable`, session kept |
-| store failure | `500 server_error` |
+| repository failure | `500 server_error` |
 
 ## Lifetimes and options
 
@@ -202,38 +203,44 @@ an account blocked or signed out at the IdP fails the next refresh with
 
 ## Storage
 
+Codes and sessions are persisted through the two interfaces in
+`oidc/native/repository`; the entities they store are in
+`oidc/native/repository/store`:
+
 ```go
-type Store interface {
-    PutCode(ctx, Code) error
-    TakeCode(ctx, hash string) (Code, error)          // atomic find+delete; ErrNotFound
-    CreateSession(ctx, Session) error
-    GetSession(ctx, id string) (Session, error)       // ErrNotFound
-    RotateSession(ctx, s Session, expectedHash string) error // CAS on RefreshHash; ErrConflict
-    DeleteSession(ctx, id string) error               // idempotent
+type Code interface {
+    Put(ctx, c store.Code) error
+    Take(ctx, hash string) (store.Code, error) // atomic find-and-delete; ErrNotFound
+}
+
+type Session interface {
+    Create(ctx, s store.Session) error
+    Get(ctx, id string) (store.Session, error)              // ErrNotFound
+    Rotate(ctx, s store.Session, expectedHash string) error // CAS on RefreshHash; ErrConflict
+    Delete(ctx, id string) error                            // idempotent
 }
 ```
 
-- `native.NewMemoryStore()`: tests, sandboxes, single instances that can
-  lose all sessions on restart.
-- `mongostore.New(persistor)`: MongoDB through keel's
-  `persistence/mongo`, with TTL indexes on `expiresAt` in
-  `gosso_native_codes` and `gosso_native_sessions`
-  (`WithCodesCollection`, `WithSessionsCollection`).
+The same package implements them on MongoDB through keel's
+`persistence/mongo`: `NewDefaultCode(persistor)` and
+`NewDefaultSession(persistor)` use the collections `gosso_native_codes`
+and `gosso_native_sessions`, each with a unique index on `id` and a TTL
+index on `expiresAt`. `NewCode(collection)` and `NewSession(collection)`
+take a collection you opened yourself (use `DefaultCodeIndices` /
+`DefaultSessionIndices`).
 
 ```go
+import "github.com/foomo/gosso/oidc/native/repository"
+
 persistor, err := keelmongo.New(ctx, "mongodb://mongo:27017/app")
-store, err := mongostore.New(persistor)
+codes, err := repository.NewDefaultCode(persistor)
+sessions, err := repository.NewDefaultSession(persistor)
+b, err := native.New(codes, sessions, hooks, clients, encryptionKey)
 ```
 
-Stores must not filter by expiry: the broker checks `ExpiresAt` itself,
-and TTL indexes are only garbage collection. A custom store can run the
-contract suite in `oidc/native/nativetest`:
-
-```go
-func TestMyStore(t *testing.T) {
-    nativetest.TestStore(t, func(t *testing.T) native.Store { return newMyStore(t) })
-}
-```
+Repositories must not filter by expiry: the broker checks `ExpiresAt`
+itself, and TTL indexes are only garbage collection. Another backend only
+has to implement the two interfaces.
 
 ## Security notes
 
@@ -279,6 +286,6 @@ func TestMyStore(t *testing.T) {
   again.
 
 Whatever fails after the IdP issued a new refresh token (UserInfo,
-`Authenticate`, `Mint`, the store, the app hanging up), the broker keeps
+`Authenticate`, `Mint`, a repository, the app hanging up), the broker keeps
 that token and rolls its own refresh token back, so the app's retry with
 the same refresh token works.

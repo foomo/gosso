@@ -34,11 +34,17 @@ github.com/foomo/gosso/oidc     # OIDC RP: auth-code + PKCE, coreos/go-oidc/v3 +
   refresh.go + _test.go         # RP.Refresh, ErrRefreshRejected
 
 github.com/foomo/gosso/oidc/native            # opt-in, STATEFUL native-app broker
+  README.md
   broker.go, options.go, hooks.go             # New, Attach, Handlers; web-hook wrappers
   authorize.go, token.go, refresh.go, revoke.go, oautherror.go
-  types.go, store.go, memorystore.go, secret.go, telemetry.go
-  nativetest/store.go                         # exported Store contract suite
-  mongostore/                                 # keelmongo Store, TTL indexes on expiresAt
+  types.go (Client, Tokens, Hooks), secret.go, telemetry.go
+
+github.com/foomo/gosso/oidc/native/repository # commerce-style repository layer
+  interfaces.go                               # Code, Session interfaces; ErrNotFound, ErrConflict
+  code.go + codeindex.go, session.go + sessionindex.go, index.go, document.go  # keelmongo BaseCode/BaseSession
+  store/                                      # entities: Code, Session, Subject, Attributes, EncryptedToken
+
+internal/mongotest              # one mongo:7 testcontainer per test binary, fresh DB per persistor
 
 internal/fakeidp                # httptest OIDC IdP (discovery, JWKS, authorize, token, userinfo)
 
@@ -52,7 +58,7 @@ examples/                       # separate module (replace ../)
 
 Violating these requires explicit discussion — they're why the library exists:
 
-1. **Stateless framework — except the opt-in `oidc/native` broker, which owns codes and refresh sessions behind `native.Store`.** No session storage elsewhere. The SAML `sessionProvider` returns `ErrNoSession` from `GetSession` on purpose — "is the user logged in?" is answered entirely by consumer code.
+1. **Stateless framework — except the opt-in `oidc/native` broker, which owns codes and refresh sessions through `repository.Code` / `repository.Session` (MongoDB via keelmongo).** No session storage elsewhere. The SAML `sessionProvider` returns `ErrNoSession` from `GetSession` on purpose — "is the user logged in?" is answered entirely by consumer code.
 2. **Consumer owns the session.** `OnAuthenticated[T]` hands over a `Subject[T]` plus the ResponseWriter; the consumer writes whatever cookie/JWT/server-side record it wants. Returning an error aborts login as HTTP 500.
 3. **Shared `Subject[T]` across protocols.** SAML and OIDC both produce `sso.Subject[T]` with the same common fields (`ExternalID`, `Email`, `Firstname`, `Lastname`, `Groups`, `NameID`) and differ only in `Raw T` (`saml.Payload` vs `oidc.Payload`). Don't diverge the shared fields.
 4. **Transit state ≠ session state.** The OIDC package uses a signed short-lived cookie `gosso_oidc_transit` to carry `state`/`nonce`/PKCE verifier between `/login` and `/callback`. Protocol plumbing, not a user session — carries no identity, deleted on first read.
@@ -100,13 +106,14 @@ make docs.build       # static build -> docs/.vitepress/dist
 - **`saml/`**: internal `package saml` tests. `parseAssertion` tested with hand-constructed `*saml.Assertion`; `safeTarget` table test.
 - **`oidc/`**: internal `package oidc` tests. Transit codec (round-trip + tamper + expiry + key rotation + login context), PKCE helpers (RFC 7636 test vector), `stringSliceClaim`, `buildSubject` merge precedence; login context, `OnLoginError` and `RP.Refresh` end to end against `internal/fakeidp`.
 - **`internal/fakeidp`**: httptest OIDC IdP with steerable refresh behaviour (rotate / keep / no ID token / other subject / reject / 5xx, delay, call count). Tests need local port binding.
-- **`oidc/native`**: internal tests against fakeidp + a real RP (`fixture_test.go`), settable clock; `nativetest.TestStore` is the Store contract (memory store runs it in `package native_test`).
-- **`oidc/native/mongostore`**: runs the contract against testcontainers `mongo:7`; skips without Docker.
+- **Docker is required**: `oidc/native` and `oidc/native/repository` tests run against `mongo:7` via `internal/mongotest` (testcontainers). There is no in-memory repository on purpose — no parallel implementation to maintain.
+- **`oidc/native`**: internal tests against fakeidp + a real RP + MongoDB repositories (`fixture_test.go`), settable clock; `sessionfaults_test.go` wraps `repository.Session` for failure injection.
+- **`oidc/native/repository`**: repository semantics (take-once, CAS rotate, idempotent delete, copies) and index checks.
 - No SAML stub-IdP integration test yet — `crewjam/saml`'s `testsaml/` helpers are the starting point.
 
 ## Sandbox specifics
 
-- Keycloak 26.0, `quay.io/keycloak/keycloak:26.0`, port 8081 on host.
+- Keycloak 26.0, `quay.io/keycloak/keycloak:26.0`, port 8081 on host; MongoDB `mongo:7` on 27017 for the native broker (`mongodb://localhost:27017/gosso_sandbox`).
 - Realm `gosso-sandbox` pre-provisioned from `realm-export.json` on first boot (users: `alice` / `password` in admins, `bob` / `password` in users; OIDC client `gosso-oidc` with PKCE enabled; SAML client whose attribute mappers emit Azure-AD-style URIs so the library's `AzureADAttributeMap` works unmodified).
 - Demo app keeps an in-memory session store keyed by a random HttpOnly cookie; it strips the raw SAML assertion / OIDC ID token down to a JSON-friendly projection plus `RawIDToken`/`SessionIndex` for logout.
 - Dev SP cert at `examples/sandbox/certs/sp.{crt,key}` is committed. Not for production.
@@ -118,8 +125,8 @@ make docs.build       # static build -> docs/.vitepress/dist
 - `github.com/coreos/go-oidc/v3` — OIDC ID-token verification, discovery, JWKS.
 - `golang.org/x/oauth2` — auth code + token exchange.
 - `github.com/foomo/go/options` — functional options helpers (`OptionE[T]`, `ApplyE`).
-- `github.com/foomo/keel/persistence/mongo` (keelmongo) + `go.mongodb.org/mongo-driver/v2` — `oidc/native/mongostore` only. Requires Go 1.27.
-- `github.com/stretchr/testify`, `github.com/go-jose/go-jose/v4` (fakeidp signing), `github.com/testcontainers/testcontainers-go/modules/mongodb` — tests only.
+- `github.com/foomo/keel/persistence/mongo` (keelmongo) + `go.mongodb.org/mongo-driver/v2` — `oidc/native/repository`. Requires Go 1.27.
+- `github.com/stretchr/testify`, `github.com/go-jose/go-jose/v4` (fakeidp signing), `github.com/testcontainers/testcontainers-go/modules/mongodb` — tests only (`internal/mongotest`).
 
 ## Open, non-blocking follow-ups
 

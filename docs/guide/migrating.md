@@ -17,7 +17,8 @@ When the first breaking change lands, the pattern will be:
 ## Unreleased
 
 - **Go 1.27 is the minimum version.** `github.com/foomo/keel/persistence/mongo`
-  (used by `oidc/native/mongostore`) requires it.
+  (used by the native broker's repositories in `oidc/native/repository`)
+  requires it.
 - No API breaks: login context, `WithOnLoginError`, `RP.Refresh` and the
   `oidc/native` broker are additions. Without a login context or
   `WithOnLoginError`, the web flow behaves exactly as before.
