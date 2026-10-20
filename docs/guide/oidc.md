@@ -133,6 +133,11 @@ secrets in it. Keep it small: browsers silently drop cookies over about
 would exceed 4000 bytes. It reaches the hooks only after the callback has verified
 the transit cookie and `state`.
 
+`oidc.WithLoginInitError(func(w, r, err))` replaces that `500` for any
+failure to start the login (cookie too large, random generation failed);
+the function owns the response. The native broker uses it to redirect
+the app with `error=server_error`.
+
 ## Redirecting on callback errors (`WithOnLoginError`)
 
 By default a failed callback answers with a plain HTTP error. Supply

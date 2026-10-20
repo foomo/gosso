@@ -19,6 +19,7 @@ type LoginOption func(*loginOptions)
 type loginOptions struct {
 	target  string
 	context LoginContext
+	onError func(w http.ResponseWriter, r *http.Request, err error)
 }
 
 // WithLoginTarget sets the post-login target. Like ?target= on the login
@@ -41,6 +42,15 @@ func WithLoginContext(lc LoginContext) LoginOption {
 		}
 
 		o.context = maps.Clone(lc)
+	}
+}
+
+// WithLoginInitError replaces the default 500 response when the login
+// cannot start (random generation failed, transit cookie too large). fn
+// owns the response; nothing has been written yet.
+func WithLoginInitError(fn func(w http.ResponseWriter, r *http.Request, err error)) LoginOption {
+	return func(o *loginOptions) {
+		o.onError = fn
 	}
 }
 
@@ -74,27 +84,32 @@ func (rp *RP) Login(w http.ResponseWriter, r *http.Request, opts ...LoginOption)
 		opt(&o)
 	}
 
+	initFailed := func(stage string, err error) {
+		rp.fail(ctx, r, nil, stage, err)
+
+		if o.onError != nil {
+			o.onError(w, r, err)
+			return
+		}
+
+		http.Error(w, "login init failed", http.StatusInternalServerError)
+	}
+
 	state, err := generateState()
 	if err != nil {
-		rp.fail(ctx, r, nil, "generate-state", err)
-		http.Error(w, "login init failed", http.StatusInternalServerError)
-
+		initFailed("generate-state", err)
 		return
 	}
 
 	nonce, err := generateNonce()
 	if err != nil {
-		rp.fail(ctx, r, nil, "generate-nonce", err)
-		http.Error(w, "login init failed", http.StatusInternalServerError)
-
+		initFailed("generate-nonce", err)
 		return
 	}
 
 	verifier, err := generateVerifier()
 	if err != nil {
-		rp.fail(ctx, r, nil, "generate-verifier", err)
-		http.Error(w, "login init failed", http.StatusInternalServerError)
-
+		initFailed("generate-verifier", err)
 		return
 	}
 
@@ -105,9 +120,7 @@ func (rp *RP) Login(w http.ResponseWriter, r *http.Request, opts ...LoginOption)
 		Target:       safepath.Target(o.target),
 		Context:      o.context,
 	}); err != nil {
-		rp.fail(ctx, r, nil, "transit-write", err)
-		http.Error(w, "login init failed", http.StatusInternalServerError)
-
+		initFailed("transit-write", err)
 		return
 	}
 

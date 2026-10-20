@@ -105,6 +105,8 @@ func (rp *RP) refresh(ctx context.Context, refreshToken, expectedExternalID stri
 		return sso.Subject[Payload]{}, "token-refresh", fmt.Errorf("refresh token grant: %w", err)
 	}
 
+	// x/oauth2 already carries the old refresh token over when the IdP does
+	// not rotate; the fallback keeps that guarantee should it ever stop.
 	next := tok.RefreshToken
 	if next == "" {
 		next = refreshToken

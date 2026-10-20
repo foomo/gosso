@@ -125,7 +125,9 @@ func validateClients(clients []Client) (map[string]Client, error) {
 // Attach hands the broker the RP it logs in and refreshes through. It
 // fails unless OnAuthenticated, OnRedirect and OnLoginError were all taken
 // from this broker: a missing wrapper would silently send native logins
-// down the web path. Until Attach succeeds the handlers answer 500.
+// down the web path. It only sees that the wrappers were created, not that
+// they reached rp: pass them to oidc.New. Until Attach succeeds the
+// handlers answer 500.
 func (b *Broker) Attach(rp *oidc.RP) error {
 	if rp == nil {
 		return errors.New("rp must not be nil")

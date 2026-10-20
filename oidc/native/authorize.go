@@ -86,7 +86,8 @@ func (b *Broker) handleAuthorize(w http.ResponseWriter, r *http.Request, rp *oid
 	case rt != "" && rt != "code":
 		fail(errUnsupportedResponseType)
 		return
-	case !validState(state),
+	case rt == "",
+		!validState(state),
 		!validChallenge(q.Get("code_challenge")),
 		q.Get("code_challenge_method") != "S256":
 		fail(errInvalidRequest)
@@ -94,6 +95,9 @@ func (b *Broker) handleAuthorize(w http.ResponseWriter, r *http.Request, rp *oid
 	}
 
 	rp.Login(w, r,
+		oidc.WithLoginInitError(func(http.ResponseWriter, *http.Request, error) {
+			fail(errServerError)
+		}),
 		oidc.WithLoginTarget("/"),
 		oidc.WithLoginContext(nativeLogin{
 			clientID:    q.Get("client_id"),

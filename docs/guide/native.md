@@ -79,6 +79,8 @@ mux.Handle("/oidc/app/revoke", h.Revoke)
 
 `Attach` fails unless all three wrappers were taken from the broker: a
 forgotten wrapper would silently send native logins down the web path.
+It only sees that the wrappers were created, not that they were passed to
+`oidc.New`, so make sure they are.
 Until `Attach` succeeds the handlers answer `500 server_error`.
 
 The wrappers branch on the login context. A native login skips the web
@@ -121,7 +123,7 @@ native.Hooks{
 | `state` | required, 1–512 printable ASCII characters except `<`, `>` and `&` |
 | `code_challenge` | required, 43 base64url characters |
 | `code_challenge_method` | must be `S256`; `plain` is rejected |
-| `response_type` | `code` or omitted |
+| `response_type` | required, must be `code` |
 | `scope` | ignored |
 
 An unknown `client_id` or `redirect_uri` is answered `400` in the browser
@@ -258,13 +260,15 @@ func TestMyStore(t *testing.T) {
 
 ## Known limitations
 
-- **Concurrent refreshes**: two refreshes with the same token both
-  succeed, with one IdP call. The response that completes **last**
-  carries the current refresh token; the other one's token only works
-  for the grace window. An app that keeps the latest response it
-  received is fine. One that keeps an earlier response and uses it after
-  the grace window triggers reuse detection, which ends the session.
-  Serialising refreshes in the app avoids the question entirely.
+- **Concurrent refreshes**: any number of refreshes with the same token
+  succeed inside the grace window, with one IdP call. The window starts
+  at the first rotation and is not extended by the duplicates. The
+  response that completes **last** carries the current refresh token;
+  earlier responses' tokens stop working as soon as a later one is
+  issued. An app that keeps the latest response it received is fine.
+  One that keeps an earlier response triggers reuse detection, which
+  ends the session. Serialising refreshes in the app avoids the question
+  entirely.
 - **An IdP refresh token is required.** Request `offline_access` (or
   whatever your IdP needs to issue one). A login without one fails right
   away with `error=server_error` instead of producing a session that dies

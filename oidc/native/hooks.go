@@ -180,6 +180,13 @@ func (b *Broker) OnLoginError(web oidc.OnLoginError) oidc.OnLoginError {
 
 		b.logError(r, "native-login-"+stage, err)
 
+		// as in issueCode: the configuration may have changed since the
+		// login started
+		if _, known, allowed := b.client(n.clientID, n.redirectURI); !known || !allowed {
+			b.logError(r, "native-login-redirect", fmt.Errorf("native: client %q or redirect uri no longer registered", n.clientID))
+			return ""
+		}
+
 		code := errServerError
 		if idpErr := r.URL.Query().Get("error"); stage == oidc.StageIDPError && slices.Contains(passthroughIDPErrors, idpErr) {
 			code = idpErr

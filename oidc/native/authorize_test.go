@@ -164,6 +164,7 @@ func TestAuthorize_Validation(t *testing.T) {
 		"plain method":      {mutate: func(q url.Values) { q.Set("code_challenge_method", "plain") }, status: http.StatusFound, wantError: "invalid_request"},
 		"missing method":    {mutate: func(q url.Values) { q.Del("code_challenge_method") }, status: http.StatusFound, wantError: "invalid_request"},
 		"token response":    {mutate: func(q url.Values) { q.Set("response_type", "token") }, status: http.StatusFound, wantError: "unsupported_response_type"},
+		"missing response":  {mutate: func(q url.Values) { q.Del("response_type") }, status: http.StatusFound, wantError: "invalid_request"},
 		"post":              {mutate: func(url.Values) {}, method: http.MethodPost, status: http.StatusMethodNotAllowed},
 	}
 
@@ -213,20 +214,40 @@ func TestAuthorize_Validation(t *testing.T) {
 		assert.True(t, strings.HasPrefix(rec.Header().Get("Location"), f.idp.URL+"/authorize?"), rec.Header().Get("Location"))
 		assert.True(t, hasTransitCookie(rec))
 	})
+}
 
-	t.Run("response type omitted", func(t *testing.T) {
-		t.Parallel()
+// A login that cannot start (here: the transit cookie would exceed the
+// browser limit) redirects the app with server_error instead of leaving it
+// waiting on a 500 page.
+func TestAuthorize_LoginInitFails(t *testing.T) {
+	t.Parallel()
 
-		q := authorizeQuery("app-state", challenge)
-		q.Del("response_type")
+	f := newFixture(t)
+	longRedirect := appRedirect + "?" + strings.Repeat("p", 3500)
 
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/app/authorize?"+q.Encode(), nil)
-		f.broker.Handlers().Authorize.ServeHTTP(rec, req)
+	b, err := New(NewMemoryStore(), validHooks(), []Client{{ID: clientIOS, RedirectURIs: []string{longRedirect}}}, testKey)
+	require.NoError(t, err)
 
-		require.Equal(t, http.StatusFound, rec.Code)
-		assert.True(t, hasTransitCookie(rec))
-	})
+	b.OnAuthenticated(nil)
+	b.OnRedirect(nil)
+	b.OnLoginError(nil)
+	require.NoError(t, b.Attach(f.rp))
+
+	q := authorizeQuery("app-state", hashToken(strings.Repeat("v", 43)))
+	q.Set("redirect_uri", longRedirect)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/app/authorize?"+q.Encode(), nil)
+	b.Handlers().Authorize.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusFound, rec.Code)
+	assert.False(t, hasTransitCookie(rec))
+
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "com.example.app", loc.Scheme)
+	assert.Equal(t, errServerError, loc.Query().Get("error"))
+	assert.Equal(t, "app-state", loc.Query().Get("state"))
 }
 
 func TestAuthorize_BeforeAttach(t *testing.T) {

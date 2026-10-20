@@ -2,6 +2,7 @@ package native
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -78,6 +79,38 @@ func TestFlow_UnknownIdPErrorBecomesServerError(t *testing.T) {
 
 	loc := f.login(t, "st", hashToken(strings.Repeat("v", 43)))
 	assert.Equal(t, appRedirect+"?error=server_error&state=st", loc.String())
+}
+
+// A failed login whose client or redirect URI was deregistered meanwhile
+// is not redirected to the app.
+func TestOnLoginError_Deregistered(t *testing.T) {
+	t.Parallel()
+
+	b, err := New(NewMemoryStore(), validHooks(), testClients(), testKey)
+	require.NoError(t, err)
+
+	onLoginError := b.OnLoginError(nil)
+
+	tests := map[string]struct {
+		clientID    string
+		redirectURI string
+		want        string
+	}{
+		"registered":       {clientID: clientIOS, redirectURI: appRedirect, want: appRedirect + "?error=server_error&state=st"},
+		"unknown client":   {clientID: "gone", redirectURI: appRedirect},
+		"unknown redirect": {clientID: clientIOS, redirectURI: "com.example.old:/cb"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			lc := nativeLogin{clientID: tt.clientID, redirectURI: tt.redirectURI, state: "st"}.loginContext()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/callback", nil)
+
+			got := onLoginError(t.Context(), httptest.NewRecorder(), req, lc, "exchange", errHook)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestFlow_NoIDPRefreshToken(t *testing.T) {

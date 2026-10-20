@@ -267,6 +267,39 @@ func TestLogin_WebUnchanged(t *testing.T) {
 	assert.Equal(t, "/account", f.rec.target)
 }
 
+func TestLogin_InitError(t *testing.T) {
+	t.Parallel()
+
+	oversized := WithLoginContext(LoginContext{"k": strings.Repeat("<", 1000)})
+
+	t.Run("default 500", func(t *testing.T) {
+		t.Parallel()
+
+		f := newRPFixture(t, nil, oversized)
+
+		resp := f.get(t, "/start")
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
+
+	t.Run("custom response", func(t *testing.T) {
+		t.Parallel()
+
+		var gotErr error
+
+		f := newRPFixture(t, nil, oversized, WithLoginInitError(func(w http.ResponseWriter, r *http.Request, err error) {
+			gotErr = err
+
+			http.Redirect(w, r, "/failed", http.StatusFound)
+		}))
+
+		resp := f.get(t, "/start")
+		require.Equal(t, http.StatusFound, resp.StatusCode)
+		assert.Equal(t, "/failed", resp.Header.Get("Location"))
+		require.Error(t, gotErr)
+		assert.Empty(t, resp.Header.Values("Set-Cookie"), "no transit cookie")
+	})
+}
+
 func TestLoginContextFromContext_ReturnsClone(t *testing.T) {
 	t.Parallel()
 
