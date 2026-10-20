@@ -237,6 +237,89 @@ func TestToken_RefreshMalformed(t *testing.T) {
 	assertOAuthError(t, f.refresh(t, ""), http.StatusBadRequest, errInvalidRequest)
 }
 
+// Every duplicate in a burst passes, not just the first: grace hits must
+// not retire the token the burst started with.
+func TestToken_RefreshConcurrentThree(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	rt := f.fullLogin(t)
+	f.idp.SetRefreshDelay(200 * time.Millisecond)
+
+	var (
+		wg      sync.WaitGroup
+		results [3]tokenResult
+	)
+
+	for i := range results {
+		wg.Go(func() { results[i] = f.refresh(t, rt) })
+		time.Sleep(50 * time.Millisecond) // the first reaches the IdP
+	}
+
+	wg.Wait()
+
+	for _, r := range results {
+		assert.Equal(t, http.StatusOK, r.status, "%v", r.body)
+	}
+
+	assert.Equal(t, 1, f.idp.RefreshCalls())
+
+	_, err := sessionOf(t, f, rt)
+	require.NoError(t, err, "session survived")
+}
+
+// A duplicate arriving after the primary completed still passes inside
+// the window, and the primary's token stays current.
+func TestToken_RefreshLateDuplicateAfterPersist(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	a := f.fullLogin(t)
+	f.idp.SetRefreshDelay(200 * time.Millisecond)
+
+	var (
+		wg      sync.WaitGroup
+		primary tokenResult
+	)
+
+	wg.Go(func() { primary = f.refresh(t, a) })
+
+	time.Sleep(50 * time.Millisecond) // primary is at the IdP
+
+	require.Equal(t, http.StatusOK, f.refresh(t, a).status)
+
+	wg.Wait()
+	require.Equal(t, http.StatusOK, primary.status, "%v", primary.body)
+
+	late := f.refresh(t, a)
+	require.Equal(t, http.StatusOK, late.status, "%v", late.body)
+
+	f.idp.SetRefreshDelay(0)
+	f.clock.Advance(11 * time.Second) // grace window closed
+
+	res := f.refresh(t, late.str("refresh_token"))
+	assert.Equal(t, http.StatusOK, res.status, "%v", res.body)
+}
+
+// Grace hits do not extend the window: it runs from the rotation.
+func TestToken_RefreshGraceNotExtended(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	a := f.fullLogin(t)
+
+	require.Equal(t, http.StatusOK, f.refresh(t, a).status)
+
+	f.clock.Advance(6 * time.Second)
+	require.Equal(t, http.StatusOK, f.refresh(t, a).status)
+
+	f.clock.Advance(3 * time.Second)
+	require.Equal(t, http.StatusOK, f.refresh(t, a).status)
+
+	f.clock.Advance(2 * time.Second) // 11s after the rotation
+	assertOAuthError(t, f.refresh(t, a), http.StatusBadRequest, errInvalidGrant)
+}
+
 // idpTokenOf returns the decrypted IdP refresh token of rt's session.
 func idpTokenOf(t *testing.T, f *fixture, rt string) string {
 	t.Helper()
@@ -286,6 +369,37 @@ func TestToken_RefreshRollbackConflictKeepsIdPToken(t *testing.T) {
 	f.clock.Advance(time.Minute)
 
 	res := f.refresh(t, c)
+	assert.Equal(t, http.StatusOK, res.status, "%v", res.body)
+}
+
+// After a rollback that conflicted with a grace hit, the app's retry with
+// the original token passes as a grace hit instead of reuse.
+func TestToken_RefreshRetryAfterRollbackConflict(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	a := f.fullLogin(t)
+
+	f.idp.SetRefreshDelay(300 * time.Millisecond)
+	f.setAuthenticateErr(errHook)
+
+	var (
+		wg      sync.WaitGroup
+		primary tokenResult
+	)
+
+	wg.Go(func() { primary = f.refresh(t, a) })
+
+	time.Sleep(100 * time.Millisecond) // primary is at the IdP
+
+	require.Equal(t, http.StatusOK, f.refresh(t, a).status)
+
+	wg.Wait()
+	assertOAuthError(t, primary, http.StatusServiceUnavailable, errTemporarilyUnavailable)
+
+	f.setAuthenticateErr(nil)
+
+	res := f.refresh(t, a)
 	assert.Equal(t, http.StatusOK, res.status, "%v", res.body)
 }
 

@@ -21,12 +21,13 @@ const refreshWorkTimeout = 30 * time.Second
 // refreshTokenGrant redeems a refresh token "<sessionID>.<secret>".
 //
 // The current secret is rotated before the IdP is called: the rotation is
-// claimed with a compare-and-swap on the stored hash, so of two concurrent
-// requests with the same token exactly one calls the IdP. The other finds
-// its secret as the previous one and, inside the rotation grace window,
-// gets a fresh token set without an IdP call. A transient failure after
+// claimed with a compare-and-swap on the stored hash, so of concurrent
+// requests with the same token exactly one calls the IdP. The others find
+// their secret as the previous one and, inside the rotation grace window,
+// get a fresh token set without an IdP call. A transient failure after
 // the claim rolls the secret back, so the app's retry with the same token
-// is not mistaken for reuse.
+// is not mistaken for reuse; if a grace hit rotated meanwhile, the retry
+// still passes as a grace hit inside the window.
 func (b *Broker) refreshTokenGrant(w http.ResponseWriter, r *http.Request, rp *oidc.RP, client Client) {
 	ctx := r.Context()
 
@@ -255,7 +256,8 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s Session, h string) bool 
 // persist stores the refreshed session. When a concurrent grace hit rotated
 // the secret meanwhile, the refreshed data goes onto the latest state and
 // the secret is rotated once more, so this response, which completes last,
-// carries the current refresh token.
+// carries the current refresh token. The previous secret and its window
+// are kept, so a late duplicate of the original token still passes.
 func (g *refreshGrant) persist(ctx context.Context, final Session, expected string, resp tokenResponse, sub sso.Subject[oidc.Payload], attrs Attributes, sealed EncryptedToken, now time.Time) (tokenResponse, error) {
 	for range maxRotateAttempts {
 		err := g.b.store.RotateSession(ctx, final, expected)
@@ -276,8 +278,6 @@ func (g *refreshGrant) persist(ctx context.Context, final Session, expected stri
 		next := cur
 		applyRefresh(&next, sub, attrs, sealed, now)
 		next.RefreshHash = hashToken(secret)
-		next.PreviousRefreshHash = cur.RefreshHash
-		next.RotatedAt = now
 
 		if resp, err = g.b.issue(ctx, next, secret); err != nil {
 			return resp, err
@@ -316,8 +316,9 @@ func (g *refreshGrant) storeIDPToken(ctx context.Context, id string, idpToken En
 }
 
 // graceRotate handles the previous secret inside the grace window: a
-// concurrent duplicate of a refresh in flight. It rotates again and issues
-// a fresh token set without calling the IdP.
+// concurrent duplicate of a refresh in flight. It rotates the current
+// secret and issues a fresh token set without calling the IdP; the
+// previous secret and the window it runs in are left as they are.
 func (g *refreshGrant) graceRotate(ctx context.Context, s Session) bool {
 	b := g.b
 	now := b.now()
@@ -328,10 +329,10 @@ func (g *refreshGrant) graceRotate(ctx context.Context, s Session) bool {
 		return true
 	}
 
+	// PreviousRefreshHash and RotatedAt stay: further duplicates of the
+	// same token must still pass, and the window must not extend
 	next := s
 	next.RefreshHash = hashToken(newSecret)
-	next.PreviousRefreshHash = s.RefreshHash
-	next.RotatedAt = now
 	next.LastUsedAt = now
 
 	if err := b.store.RotateSession(ctx, next, s.RefreshHash); errors.Is(err, ErrConflict) {

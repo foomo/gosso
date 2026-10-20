@@ -170,10 +170,6 @@ func (rp *RP) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	callbackCompleted.Add(ctx, 1, metric.WithAttributes(
-		attribute.String(telemetry.AttrOutcome, "success"),
-	))
-
 	target := td.Target
 	if target == "" {
 		target = "/"
@@ -193,6 +189,11 @@ func (rp *RP) handleCallback(w http.ResponseWriter, r *http.Request) {
 			target = finalTarget
 		}
 	}
+
+	// counted only now: an OnRedirect failure is counted by fail instead
+	callbackCompleted.Add(ctx, 1, metric.WithAttributes(
+		attribute.String(telemetry.AttrOutcome, "success"),
+	))
 
 	http.Redirect(w, r, target, http.StatusFound)
 }

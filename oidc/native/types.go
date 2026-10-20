@@ -79,7 +79,8 @@ type Session struct {
 	// RefreshHash is base64url(SHA-256) of the current refresh secret.
 	RefreshHash string
 	// PreviousRefreshHash and RotatedAt let the previous secret through
-	// for the rotation grace window.
+	// for the rotation grace window. Grace hits rotate RefreshHash but
+	// leave both as they are.
 	PreviousRefreshHash string
 	RotatedAt           time.Time
 	Subject             Subject
