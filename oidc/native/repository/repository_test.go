@@ -129,11 +129,14 @@ func TestSession(t *testing.T) {
 
 	session := func(id string) store.Session {
 		return store.Session{
-			ID:                  id,
-			ClientID:            "app-ios",
-			RefreshHash:         "h1",
-			PreviousRefreshHash: "h0",
-			RotatedAt:           now.Add(-time.Second),
+			ID:                    id,
+			ClientID:              "app-ios",
+			RefreshHashes:         []string{"h2", "h2b"},
+			PreviousRefreshHashes: []string{"h1"},
+			RotatedAt:             now.Add(-time.Second),
+			RetiredRefreshHashes:  []string{"h0"},
+			RefreshLease:          "lease",
+			RefreshLeaseUntil:     now.Add(time.Minute),
 			Subject: store.Subject{
 				ExternalID: "alice",
 				Email:      "alice@example.com",
@@ -186,33 +189,40 @@ func TestSession(t *testing.T) {
 		require.ErrorIs(t, err, ErrNotFound)
 	})
 
-	t.Run("rotate with current hash", func(t *testing.T) {
+	t.Run("rotate with current version", func(t *testing.T) {
 		s := newRepo(t)
 		require.NoError(t, s.Create(t.Context(), session("s1")))
 
 		next := session("s1")
-		next.RefreshHash = "h2"
-		next.PreviousRefreshHash = "h1"
+		next.RefreshHashes = []string{"h3"}
+		next.PreviousRefreshHashes = []string{"h2", "h2b"}
 		next.RotatedAt = now
+		next.RetiredRefreshHashes = []string{"h0", "h1"}
+		next.RefreshLease = ""
+		next.RefreshLeaseUntil = time.Time{}
 		next.Attributes = store.Attributes{attrCustomer: "c-2"}
-		require.NoError(t, s.Rotate(t.Context(), next, "h1"))
+		require.NoError(t, s.Rotate(t.Context(), next))
 
 		out, err := s.Get(t.Context(), "s1")
 		require.NoError(t, err)
+
+		next.Version++
 		assertEqualSession(t, next, out)
 	})
 
-	t.Run("rotate with stale hash", func(t *testing.T) {
+	t.Run("rotate with stale version", func(t *testing.T) {
 		s := newRepo(t)
 		require.NoError(t, s.Create(t.Context(), session("s1")))
 
 		next := session("s1")
-		next.RefreshHash = "h2"
-		require.ErrorIs(t, s.Rotate(t.Context(), next, "h0"), ErrConflict)
+		next.RefreshHashes = []string{"h3"}
+		require.NoError(t, s.Rotate(t.Context(), next))
+		// next.Version is now stale
+		require.ErrorIs(t, s.Rotate(t.Context(), next), ErrConflict)
 
 		out, err := s.Get(t.Context(), "s1")
 		require.NoError(t, err)
-		assert.Equal(t, "h1", out.RefreshHash)
+		assert.Equal(t, uint64(1), out.Version)
 	})
 
 	t.Run("concurrent rotate", func(t *testing.T) {
@@ -228,9 +238,9 @@ func TestSession(t *testing.T) {
 		for i := range 16 {
 			wg.Go(func() {
 				next := session("s1")
-				next.RefreshHash = "h2-" + strconv.Itoa(i)
+				next.RefreshHashes = []string{"h3-" + strconv.Itoa(i)}
 
-				err := s.Rotate(t.Context(), next, "h1")
+				err := s.Rotate(t.Context(), next)
 
 				switch {
 				case err == nil:
@@ -248,7 +258,7 @@ func TestSession(t *testing.T) {
 
 	t.Run("rotate missing session", func(t *testing.T) {
 		s := newRepo(t)
-		require.ErrorIs(t, s.Rotate(t.Context(), session("nope"), "h1"), ErrConflict)
+		require.ErrorIs(t, s.Rotate(t.Context(), session("nope")), ErrConflict)
 	})
 
 	t.Run("delete twice", func(t *testing.T) {
@@ -289,6 +299,7 @@ func assertEqualSession(t *testing.T, want, got store.Session) {
 
 	for _, p := range []struct{ w, g *time.Time }{
 		{&want.RotatedAt, &got.RotatedAt},
+		{&want.RefreshLeaseUntil, &got.RefreshLeaseUntil},
 		{&want.CreatedAt, &got.CreatedAt},
 		{&want.LastUsedAt, &got.LastUsedAt},
 		{&want.ExpiresAt, &got.ExpiresAt},

@@ -174,7 +174,7 @@ func (b *Broker) authorizationCodeGrant(w http.ResponseWriter, r *http.Request, 
 	s := store.Session{
 		ID:              id,
 		ClientID:        client.ID,
-		RefreshHash:     hashToken(secret),
+		RefreshHashes:   []string{hashToken(secret)},
 		Subject:         c.Subject,
 		Attributes:      c.Attributes,
 		IDPRefreshToken: c.IDPRefreshToken,

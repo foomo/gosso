@@ -83,6 +83,7 @@ type fixture struct {
 	authenticated    []sso.Subject[oidc.Payload]
 	webAuthCalls     int
 	webRedirectCalls int
+	mints            int
 }
 
 func newFixture(t *testing.T, opts ...Option) *fixture {
@@ -134,6 +135,8 @@ func newFixtureWithSessions(t *testing.T, wrap func(repository.Session) reposito
 		Mint: func(_ context.Context, s store.Session) (Tokens, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+
+			f.mints++
 
 			if f.mintErr != nil {
 				return Tokens{}, f.mintErr
@@ -240,6 +243,14 @@ func (f *fixture) setMintErr(err error) {
 	defer f.mu.Unlock()
 
 	f.mintErr = err
+}
+
+// mintCount returns how often Hooks.Mint ran.
+func (f *fixture) mintCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.mints
 }
 
 func (f *fixture) authenticatedSubjects() []sso.Subject[oidc.Payload] {

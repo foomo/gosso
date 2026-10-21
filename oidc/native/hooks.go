@@ -117,11 +117,20 @@ func (b *Broker) OnRedirect(web oidc.OnRedirect) oidc.OnRedirect {
 	}
 }
 
-func (b *Broker) issueCode(ctx context.Context, r *http.Request, n nativeLogin, sub sso.Subject[oidc.Payload]) (string, error) {
-	// the context is signed, but the configuration may have changed since
-	// the login started
+// checkRegistered verifies that a native login's client and redirect URI
+// are still registered: the login context is signed, but the
+// configuration may have changed since the login started.
+func (b *Broker) checkRegistered(n nativeLogin) error {
 	if _, known, allowed := b.client(n.clientID, n.redirectURI); !known || !allowed {
-		return "", fmt.Errorf("native: client %q or redirect uri no longer registered", n.clientID)
+		return fmt.Errorf("native: client %q or redirect uri no longer registered", n.clientID)
+	}
+
+	return nil
+}
+
+func (b *Broker) issueCode(ctx context.Context, r *http.Request, n nativeLogin, sub sso.Subject[oidc.Payload]) (string, error) {
+	if err := b.checkRegistered(n); err != nil {
+		return "", err
 	}
 
 	if sub.Raw.RefreshToken == "" {
@@ -181,10 +190,8 @@ func (b *Broker) OnLoginError(web oidc.OnLoginError) oidc.OnLoginError {
 
 		b.logError(r, "native-login-"+stage, err)
 
-		// as in issueCode: the configuration may have changed since the
-		// login started
-		if _, known, allowed := b.client(n.clientID, n.redirectURI); !known || !allowed {
-			b.logError(r, "native-login-redirect", fmt.Errorf("native: client %q or redirect uri no longer registered", n.clientID))
+		if err := b.checkRegistered(n); err != nil {
+			b.logError(r, "native-login-redirect", err)
 			return ""
 		}
 

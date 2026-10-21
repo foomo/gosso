@@ -159,9 +159,11 @@ Treat the refresh token as opaque. Every refresh returns a new one.
 
 ### `POST revoke`
 
-`token=<refresh token>&client_id=…`. Ends the session (RFC 7009). Always
-`200 {}`, including for unknown or malformed tokens and tokens of another
-client; only a missing `token` is `400 invalid_request`.
+`token=<refresh token>&client_id=…`. Ends the session (RFC 7009). The
+client must identify itself: a missing or unknown `client_id` is
+`400 invalid_client`, a missing `token` is `400 invalid_request`. Otherwise
+always `200 {}`, including for unknown or malformed tokens and tokens of
+another client.
 
 ### Errors
 
@@ -178,11 +180,12 @@ Token and revoke responses are JSON with `Cache-Control: no-store` and
 | unknown `client_id` at token | `400 invalid_client` |
 | other `grant_type` | `400 unsupported_grant_type` |
 | code unknown, expired, used; verifier, redirect or client mismatch | `400 invalid_grant` |
-| refresh token unknown, malformed, other client, session expired | `400 invalid_grant` |
-| refresh token reused outside the grace window | `400 invalid_grant`, session deleted |
+| refresh token unknown, malformed, other client, session expired or revoked | `400 invalid_grant`, session kept unless expired |
+| refresh token reused: a rotated one presented outside the grace window | `400 invalid_grant`, session deleted |
 | IdP rejects the refresh (`invalid_grant`) | `400 invalid_grant`, session deleted |
 | IdP unreachable or 5xx on refresh, subject changed | `503 temporarily_unavailable`, session kept |
 | `Authenticate` or `Mint` fails on refresh | `503 temporarily_unavailable`, session kept |
+| the request waited 60 s in total for other refreshes of the session | `503 temporarily_unavailable` |
 | repository failure | `500 server_error` |
 
 ## Lifetimes and options
@@ -191,7 +194,7 @@ Token and revoke responses are JSON with `Cache-Control: no-store` and
 | --- | --- | --- |
 | `WithCodeTTL(d)` | `60s` | how long a code can be redeemed |
 | `WithSessionTTL(d)` | `90 days` | absolute session lifetime, counted from login |
-| `WithRotationGrace(d)` | `10s` | how long the previous refresh token keeps working after a rotation |
+| `WithRotationGrace(d)` | `10s` | how long the previous refresh tokens keep working after a rotation is stored |
 | `WithDeprecatedEncryptionKeys(keys...)` | | previous 32-byte keys that still decrypt stored IdP refresh tokens |
 | `WithErrorLogger(fn)` | silent | routes runtime errors to your logger |
 | `WithClock(fn)` | `time.Now` | for tests |
@@ -248,9 +251,11 @@ has to implement the two interfaces.
 - **Codes**: 256-bit random, stored as `base64url(SHA-256)`, single use
   (atomic take), 60 s.
 - **Refresh tokens**: `<128-bit session ID>.<256-bit secret>`; only the
-  secret's hash is stored. Rotated on every use. Presenting a previous
+  secret's hash is stored. Rotated on every use. Presenting a rotated
   secret outside the grace window is treated as theft (OAuth 2.0 Security
-  BCP §4.14): the session is deleted.
+  BCP §4.14): the session is deleted. The history covers the last 32
+  rotated secrets; an older one is only rejected, like a secret the session
+  never issued. So knowing a session ID is not enough to end a session.
 - **IdP refresh token**: AES-256-GCM encrypted, bound to the subject via
   the additional data, so a ciphertext cannot be moved to another record.
   Rotate the key by passing the new one to `New` and the old one to
@@ -268,14 +273,26 @@ has to implement the two interfaces.
 ## Known limitations
 
 - **Concurrent refreshes**: any number of refreshes with the same token
-  succeed inside the grace window, with one IdP call. The window starts
-  at the first rotation and is not extended by the duplicates. The
-  response that completes **last** carries the current refresh token;
-  earlier responses' tokens stop working as soon as a later one is
-  issued. An app that keeps the latest response it received is fine.
-  One that keeps an earlier response triggers reuse detection, which
-  ends the session. Serialising refreshes in the app avoids the question
-  entirely.
+  succeed, with one IdP call. While one refresh is at the IdP the others
+  wait for it; then, and for the grace window after the rotation is
+  stored, they get refresh tokens of their own that are valid alongside
+  the first one, so it does not matter which response the app keeps. The
+  window is not extended by the duplicates. Once any of those tokens is
+  refreshed, the others are rotated tokens too; using one after the next
+  grace window ends the session. Serialising refreshes in the app avoids
+  the question entirely.
+- **Broker clocks**: a refresh holds its session for at most 60 s (30 s
+  of work plus a 30 s margin), checked against the clock of whichever
+  broker instance reads it. If instances sharing a database disagree by
+  more than the margin, or a hook blocks long past its context, a second
+  refresh can take over and call the IdP with the same IdP refresh token;
+  a rotating IdP then rejects one of them and the session ends. Keep
+  instance clocks in sync (NTP) and let hooks honour their context.
+- **A login that outlives the transit cookie** (the user takes longer at
+  the IdP than its lifetime) ends with a plain `400` from the callback:
+  without the cookie there is no trusted redirect URI to send the app.
+  Raise `oidc.WithTransitTTL` (default 5 min) if users need longer; the
+  app should time out its own wait and offer to start the login again.
 - **An IdP refresh token is required.** Request `offline_access` (or
   whatever your IdP needs to issue one). A login without one fails right
   away with `error=server_error` instead of producing a session that dies
@@ -287,5 +304,6 @@ has to implement the two interfaces.
 
 Whatever fails after the IdP issued a new refresh token (UserInfo,
 `Authenticate`, `Mint`, a repository, the app hanging up), the broker keeps
-that token and rolls its own refresh token back, so the app's retry with
-the same refresh token works.
+that token and leaves the app's refresh token valid, so the app's retry
+with the same refresh token works. Access tokens are minted once, after
+the rotation is stored; if `Mint` fails, the rotation is taken back.

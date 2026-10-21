@@ -3,6 +3,7 @@ package native
 import (
 	"errors"
 	"net/http"
+	"slices"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -13,7 +14,8 @@ import (
 )
 
 // handleRevoke ends the refresh session a refresh token belongs to (RFC
-// 7009). The answer is 200 whether or not anything was revoked: a
+// 7009). The client must identify itself with client_id (§2.1). For a
+// known client the answer is 200 whether or not anything was revoked: a
 // malformed, unknown or foreign token reveals nothing.
 func (b *Broker) handleRevoke(w http.ResponseWriter, r *http.Request, _ *oidc.RP) {
 	ctx, span := telemetry.Tracer().Start(r.Context(), "oidc.native.revoke",
@@ -41,6 +43,12 @@ func (b *Broker) handleRevoke(w http.ResponseWriter, r *http.Request, _ *oidc.RP
 		return
 	}
 
+	client, ok := b.clients[r.PostForm.Get("client_id")]
+	if !ok {
+		writeError(w, http.StatusBadRequest, errInvalidClient, "unknown client_id")
+		return
+	}
+
 	defer writeJSON(w, http.StatusOK, struct{}{})
 
 	id, secret, ok := cutToken(token)
@@ -57,7 +65,7 @@ func (b *Broker) handleRevoke(w http.ResponseWriter, r *http.Request, _ *oidc.RP
 		return
 	}
 
-	if s.ClientID != r.PostForm.Get("client_id") || !b.matchesSession(s, hashToken(secret)) {
+	if s.ClientID != client.ID || !b.matchesSession(s, hashToken(secret)) {
 		return
 	}
 
@@ -66,12 +74,14 @@ func (b *Broker) handleRevoke(w http.ResponseWriter, r *http.Request, _ *oidc.RP
 	}
 }
 
-// matchesSession reports whether h is the session's current refresh hash,
-// or its previous one within the rotation grace window.
+// matchesSession reports whether h is one of the session's current refresh
+// hashes, or a previous one within the rotation grace window.
 func (b *Broker) matchesSession(s store.Session, h string) bool {
-	return h == s.RefreshHash || b.inGrace(s, h)
+	return slices.Contains(s.RefreshHashes, h) || b.inGrace(s, h)
 }
 
+// inGrace reports whether h is a previous refresh hash and the grace
+// window after the rotation that retired it is still open.
 func (b *Broker) inGrace(s store.Session, h string) bool {
-	return s.PreviousRefreshHash != "" && h == s.PreviousRefreshHash && !b.now().After(s.RotatedAt.Add(b.rotationGrace))
+	return slices.Contains(s.PreviousRefreshHashes, h) && !b.now().After(s.RotatedAt.Add(b.rotationGrace))
 }

@@ -58,10 +58,8 @@ func TestRevoke(t *testing.T) {
 		require.NoError(t, err)
 
 		next := s
-		next.PreviousRefreshHash = s.RefreshHash
-		next.RefreshHash = "rotated"
-		next.RotatedAt = f.clock.Now()
-		require.NoError(t, f.sessions.Rotate(t.Context(), next, s.RefreshHash))
+		retire(&next, "rotated", f.clock.Now())
+		require.NoError(t, f.sessions.Rotate(t.Context(), next))
 
 		assert.Equal(t, http.StatusOK, revoke(t, f, url.Values{"token": {rt}, "client_id": {clientIOS}}).status)
 
@@ -75,9 +73,6 @@ func TestRevoke(t *testing.T) {
 		},
 		"other client": func(rt, _ string) url.Values {
 			return url.Values{"token": {rt}, "client_id": {clientAndroid}}
-		},
-		"no client": func(rt, _ string) url.Values {
-			return url.Values{"token": {rt}}
 		},
 		"garbage": func(string, string) url.Values {
 			return url.Values{"token": {"garbage"}, "client_id": {clientIOS}}
@@ -93,6 +88,24 @@ func TestRevoke(t *testing.T) {
 
 			res := revoke(t, f, form(rt, id))
 			assert.Equal(t, http.StatusOK, res.status)
+
+			_, err := f.sessions.Get(t.Context(), id)
+			require.NoError(t, err, "session kept")
+		})
+	}
+
+	for name, form := range map[string]func(rt string) url.Values{
+		"no client":      func(rt string) url.Values { return url.Values{"token": {rt}} },
+		"unknown client": func(rt string) url.Values { return url.Values{"token": {rt}, "client_id": {"nope"}} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			rt, id := issue(t, f)
+
+			// RFC 7009 §2.1: the client must identify itself
+			assertOAuthError(t, revoke(t, f, form(rt)), http.StatusBadRequest, errInvalidClient)
 
 			_, err := f.sessions.Get(t.Context(), id)
 			require.NoError(t, err, "session kept")

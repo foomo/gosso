@@ -71,6 +71,12 @@ mux.Handle("/oidc/app/revoke", h.Revoke)
 `Attach` fails unless all three wrappers were taken from the broker. It
 cannot see whether they reached `oidc.New`, so make sure they do.
 
+A login that outlives the RP's transit cookie (the user takes longer at
+the IdP than its lifetime) ends with a plain `400` at the callback, never
+with a redirect to the app: without the cookie there is no trusted
+redirect URI. Raise `oidc.WithTransitTTL` (default 5 min) if your users
+need longer, and let apps time out their own wait.
+
 ## Further reading
 
 - [Native apps guide](https://foomo.github.io/gosso/guide/native): flow,

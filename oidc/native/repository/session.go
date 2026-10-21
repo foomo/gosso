@@ -21,17 +21,21 @@ type (
 		collection *keelmongo.Collection
 	}
 	sessionDocument struct {
-		ID                  string            `bson:"id"`
-		ClientID            string            `bson:"clientID"`
-		RefreshHash         string            `bson:"refreshHash"`
-		PreviousRefreshHash string            `bson:"previousRefreshHash,omitempty"`
-		RotatedAt           time.Time         `bson:"rotatedAt"`
-		Subject             subjectDocument   `bson:"subject"`
-		Attributes          map[string]string `bson:"attributes,omitempty"`
-		IDPRefreshToken     tokenDocument     `bson:"idpRefreshToken"`
-		CreatedAt           time.Time         `bson:"createdAt"`
-		LastUsedAt          time.Time         `bson:"lastUsedAt"`
-		ExpiresAt           time.Time         `bson:"expiresAt"`
+		ID                    string            `bson:"id"`
+		ClientID              string            `bson:"clientID"`
+		Version               uint64            `bson:"version"`
+		RefreshHashes         []string          `bson:"refreshHashes"`
+		PreviousRefreshHashes []string          `bson:"previousRefreshHashes,omitempty"`
+		RotatedAt             time.Time         `bson:"rotatedAt"`
+		RetiredRefreshHashes  []string          `bson:"retiredRefreshHashes,omitempty"`
+		RefreshLease          string            `bson:"refreshLease,omitempty"`
+		RefreshLeaseUntil     time.Time         `bson:"refreshLeaseUntil"`
+		Subject               subjectDocument   `bson:"subject"`
+		Attributes            map[string]string `bson:"attributes,omitempty"`
+		IDPRefreshToken       tokenDocument     `bson:"idpRefreshToken"`
+		CreatedAt             time.Time         `bson:"createdAt"`
+		LastUsedAt            time.Time         `bson:"lastUsedAt"`
+		ExpiresAt             time.Time         `bson:"expiresAt"`
 	}
 )
 
@@ -94,28 +98,35 @@ func (r *BaseSession) Get(ctx context.Context, id string) (store.Session, error)
 	}
 
 	return store.Session{
-		ID:                  d.ID,
-		ClientID:            d.ClientID,
-		RefreshHash:         d.RefreshHash,
-		PreviousRefreshHash: d.PreviousRefreshHash,
-		RotatedAt:           d.RotatedAt,
-		Subject:             fromSubjectDocument(d.Subject),
-		Attributes:          attributes(d.Attributes),
-		IDPRefreshToken:     store.EncryptedToken(d.IDPRefreshToken),
-		CreatedAt:           d.CreatedAt,
-		LastUsedAt:          d.LastUsedAt,
-		ExpiresAt:           d.ExpiresAt,
+		ID:                    d.ID,
+		ClientID:              d.ClientID,
+		Version:               d.Version,
+		RefreshHashes:         hashes(d.RefreshHashes),
+		PreviousRefreshHashes: hashes(d.PreviousRefreshHashes),
+		RotatedAt:             d.RotatedAt,
+		RetiredRefreshHashes:  hashes(d.RetiredRefreshHashes),
+		RefreshLease:          d.RefreshLease,
+		RefreshLeaseUntil:     d.RefreshLeaseUntil,
+		Subject:               fromSubjectDocument(d.Subject),
+		Attributes:            attributes(d.Attributes),
+		IDPRefreshToken:       store.EncryptedToken(d.IDPRefreshToken),
+		CreatedAt:             d.CreatedAt,
+		LastUsedAt:            d.LastUsedAt,
+		ExpiresAt:             d.ExpiresAt,
 	}, nil
 }
 
-// Rotate replaces the session iff its stored refresh hash still equals
-// expectedHash.
-func (r *BaseSession) Rotate(ctx context.Context, s store.Session, expectedHash string) error {
-	// a compare-and-swap on refreshHash, which keelmongo's version-based
-	// Upsert does not express
+// Rotate replaces the session iff its stored version still equals
+// s.Version, and stores it with Version+1.
+func (r *BaseSession) Rotate(ctx context.Context, s store.Session) error {
+	d := toSessionDocument(s)
+	d.Version++
+
+	// a whole-document compare-and-swap: keelmongo's versioned Upsert
+	// $sets fields, which cannot clear the ones left out by omitempty
 	res, err := r.collection.Col().ReplaceOne(ctx,
-		bson.D{{Key: "id", Value: s.ID}, {Key: "refreshHash", Value: expectedHash}},
-		toSessionDocument(s),
+		bson.D{{Key: "id", Value: s.ID}, {Key: "version", Value: s.Version}},
+		d,
 	)
 	if err != nil {
 		return err
@@ -155,16 +166,20 @@ func (d *sessionDocument) SetID(id string) {
 
 func toSessionDocument(s store.Session) *sessionDocument {
 	return &sessionDocument{
-		ID:                  s.ID,
-		ClientID:            s.ClientID,
-		RefreshHash:         s.RefreshHash,
-		PreviousRefreshHash: s.PreviousRefreshHash,
-		RotatedAt:           s.RotatedAt,
-		Subject:             toSubjectDocument(s.Subject),
-		Attributes:          s.Attributes,
-		IDPRefreshToken:     tokenDocument(s.IDPRefreshToken),
-		CreatedAt:           s.CreatedAt,
-		LastUsedAt:          s.LastUsedAt,
-		ExpiresAt:           s.ExpiresAt,
+		ID:                    s.ID,
+		ClientID:              s.ClientID,
+		Version:               s.Version,
+		RefreshHashes:         s.RefreshHashes,
+		PreviousRefreshHashes: s.PreviousRefreshHashes,
+		RotatedAt:             s.RotatedAt,
+		RetiredRefreshHashes:  s.RetiredRefreshHashes,
+		RefreshLease:          s.RefreshLease,
+		RefreshLeaseUntil:     s.RefreshLeaseUntil,
+		Subject:               toSubjectDocument(s.Subject),
+		Attributes:            s.Attributes,
+		IDPRefreshToken:       tokenDocument(s.IDPRefreshToken),
+		CreatedAt:             s.CreatedAt,
+		LastUsedAt:            s.LastUsedAt,
+		ExpiresAt:             s.ExpiresAt,
 	}
 }

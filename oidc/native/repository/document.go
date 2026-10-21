@@ -40,3 +40,11 @@ func attributes(m map[string]string) store.Attributes {
 
 	return m
 }
+
+func hashes(h []string) []string {
+	if len(h) == 0 {
+		return nil
+	}
+
+	return h
+}

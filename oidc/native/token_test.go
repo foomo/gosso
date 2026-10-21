@@ -83,7 +83,7 @@ func TestToken_AuthorizationCode(t *testing.T) {
 
 		s, err := f.sessions.Get(t.Context(), id)
 		require.NoError(t, err)
-		assert.Equal(t, hashToken(secret), s.RefreshHash)
+		assert.Equal(t, []string{hashToken(secret)}, s.RefreshHashes)
 		assert.Equal(t, clientIOS, s.ClientID)
 		assert.Equal(t, "alice", s.Subject.ExternalID)
 		assert.Equal(t, store.Attributes{"k": "v"}, s.Attributes)
