@@ -46,7 +46,7 @@ the native broker mounted on the OIDC RP. It uses a stock OAuth2 library
 (`golang.org/x/oauth2`) and an RFC 8252 loopback redirect
 (`http://127.0.0.1:8090/callback`), so it proves the endpoints speak plain
 OAuth 2.0. Access tokens are opaque and live 2 minutes; the broker keeps
-codes and sessions in memory.
+codes and sessions in MongoDB (`gosso_sandbox` database).
 
 ```mermaid
 sequenceDiagram
@@ -72,22 +72,78 @@ sequenceDiagram
   CLI->>App: POST /oidc/app/revoke
 ```
 
-Walkthrough, with the sandbox running (`make sandbox.up`, `make sandbox.run`):
+## Testing the native broker
+
+Every step is a make target. Each `sandbox.app*` scenario checks its own
+expected outcome, prints `PASS` or `FAIL` and exits non-zero on failure.
+Scenarios that log in open the authorize URL in your browser (or print
+it); log in as `alice` / `password`.
+
+### 1. Start
 
 ```sh
-# login, whoami, refresh, whoami, revoke; the final refresh fails with invalid_grant
-make sandbox.app
-
-# same, but replay the old refresh token after the grace window:
-# reuse is detected and the whole session is revoked
-make sandbox.app ARGS=-demo-reuse
-
-# the IdP still decides: pause before the refresh, sign out alice's
-# offline session in the Keycloak admin (http://localhost:8081, admin / admin,
-# realm gosso-sandbox → Users → alice → Sessions), then press Enter.
-# The refresh fails with invalid_grant.
-make sandbox.app ARGS=-pause
+make sandbox.down     # optional: clean slate, drops keycloak + mongo volumes
+make sandbox.up       # keycloak :8081 + mongo :27017, returns once both are healthy
+make sandbox.status   # both containers "(healthy)"
+make sandbox.run      # demo app on :8080; keep this terminal open
 ```
+
+Broker failures are logged in the `sandbox.run` terminal as
+`gosso error stage=native-…`; `make sandbox.logs ARGS=keycloak` follows
+Keycloak.
+
+### 2. Web flows still work
+
+Open <http://localhost:8080>, log in via OIDC and via SAML, log out. This
+is the regression check for the `oidc` changes the broker relies on.
+
+### 3. Protocol checks (no login)
+
+```sh
+make sandbox.app.check
+```
+
+15 checks: authorize validation (unknown client and redirect URI answered
+`400` without redirect; `plain` PKCE, malformed challenge, hostile `state`
+and `response_type=token` redirected to the app with an error), token and
+revoke error codes and `no-store` headers, and `401 invalid_token` on
+`/app/whoami` without a bearer token.
+
+### 4. Scenarios
+
+| Target | What it proves |
+| --- | --- |
+| `make sandbox.app` | login, whoami, refresh (token rotates), whoami, revoke; refresh after revoke → `invalid_grant` |
+| `make sandbox.app.reuse` | replaying an old refresh token after the 10 s grace window → `invalid_grant`, and the current token is dead too (session revoked) |
+| `make sandbox.app.concurrent` | two refreshes with the same token at once both succeed (one Keycloak call); the token from the response that finished last still works after the grace window |
+| `make sandbox.app.outage` | interactive: run `make sandbox.idp.stop` when asked → refresh answers `503 temporarily_unavailable`; run `make sandbox.idp.start` → the **same** refresh token works again |
+| `make sandbox.app.signout` | interactive: run `make sandbox.idp.signout` when asked (revokes alice's offline token at Keycloak) → refresh → `invalid_grant` |
+
+`make sandbox.idp.signout` honours `SANDBOX_USER=bob` if you log in as
+bob.
+
+### 5. Look at the stored state
+
+```sh
+make sandbox.mongo
+```
+
+Prints the number of codes and sessions, the sessions (subject,
+attributes, timestamps, encryption key ID; refresh secrets are only ever
+stored hashed and the IdP token only encrypted) and the indexes,
+including the TTL index on `expiresAt`. Run it while
+`make sandbox.app.outage` waits at a prompt to see a live session.
+
+### 6. Restart survives
+
+```sh
+make sandbox.app.restart
+```
+
+When asked, restart `make sandbox.run` (Ctrl-C, start it again), then
+press Enter: the refresh succeeds, because sessions live in MongoDB. Only
+the sandbox's own 2-minute access tokens are in memory and are gone after
+the restart.
 
 ## Tear down
 

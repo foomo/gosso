@@ -1,9 +1,10 @@
 // Native-app demo: a CLI public client that logs in through the sandbox's
 // native broker (OAuth 2.0 for native apps, RFC 8252 loopback redirect) with
-// a stock OAuth2 library, then calls /app/whoami, refreshes, and revokes.
+// a stock OAuth2 library. Each scenario checks its own expected outcome and
+// exits non-zero when the broker misbehaves.
 //
 // Start the sandbox first (`make sandbox.up`, `make sandbox.run`), then run
-// `make sandbox.app` (or `make sandbox.app ARGS=-demo-reuse`).
+// one of the `make sandbox.app*` targets.
 package main
 
 import (
@@ -23,131 +24,329 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
 )
 
+// graceWait outlasts the broker's default 10s rotation grace window.
+const graceWait = 11 * time.Second
+
+var scenarios = map[string]func(context.Context, *client) error{
+	"basic":      scenarioBasic,
+	"reuse":      scenarioReuse,
+	"concurrent": scenarioConcurrent,
+	"outage":     scenarioOutage,
+	"signout":    scenarioSignout,
+	"restart":    scenarioRestart,
+	"check":      scenarioCheck,
+}
+
 func main() {
 	base := flag.String("base", "http://localhost:8080", "sandbox base URL")
 	clientID := flag.String("client", "sandbox-cli", "native client_id")
 	redirect := flag.String("redirect", "http://127.0.0.1:8090/callback", "loopback redirect URI")
-	demoReuse := flag.Bool("demo-reuse", false, "replay the old refresh token to show reuse detection")
-	pause := flag.Bool("pause", false, "wait for Enter before refreshing (end the IdP session meanwhile)")
+	scenario := flag.String("scenario", "basic", "basic | reuse | concurrent | outage | signout | restart | check")
 	flag.Parse()
 
-	if err := run(*base, *clientID, *redirect, *demoReuse, *pause); err != nil {
-		log.Fatal(err)
+	run, ok := scenarios[*scenario]
+	if !ok {
+		log.Fatalf("unknown scenario %q", *scenario)
 	}
-}
 
-func step(n int, format string, args ...any) {
-	fmt.Printf("%d. %s\n", n, fmt.Sprintf(format, args...))
-}
-
-func run(base, clientID, redirect string, demoReuse, pause bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
-	cfg := &oauth2.Config{
-		ClientID:    clientID,
-		RedirectURL: redirect,
-		Endpoint: oauth2.Endpoint{
-			AuthURL:   base + "/oidc/app/authorize",
-			TokenURL:  base + "/oidc/app/token",
-			AuthStyle: oauth2.AuthStyleInParams,
+	c := newClient(*base, *clientID, *redirect)
+
+	fmt.Printf("〉scenario %s against %s\n", *scenario, *base)
+
+	if err := run(ctx, c); err != nil {
+		fmt.Printf("FAIL: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("PASS")
+}
+
+// client is the native app: an oauth2.Config for the broker plus the
+// sandbox URLs.
+type client struct {
+	base     string
+	clientID string
+	redirect string
+	cfg      *oauth2.Config
+	step     int
+}
+
+func newClient(base, clientID, redirect string) *client {
+	return &client{
+		base:     base,
+		clientID: clientID,
+		redirect: redirect,
+		cfg: &oauth2.Config{
+			ClientID:    clientID,
+			RedirectURL: redirect,
+			Endpoint: oauth2.Endpoint{
+				AuthURL:   base + "/oidc/app/authorize",
+				TokenURL:  base + "/oidc/app/token",
+				AuthStyle: oauth2.AuthStyleInParams,
+			},
 		},
 	}
+}
 
-	// 1. PKCE verifier + state, authorize URL
+func (c *client) logf(format string, args ...any) {
+	c.step++
+	fmt.Printf("%d. %s\n", c.step, fmt.Sprintf(format, args...))
+}
+
+// login runs the browser login and the code exchange.
+func (c *client) login(ctx context.Context) (*oauth2.Token, error) {
 	verifier := oauth2.GenerateVerifier()
 	state := randomState()
-	authURL := cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
+	authURL := c.cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
 
-	step(1, "open this URL in a browser and log in (alice / password):\n   %s", authURL)
+	c.logf("open this URL in a browser and log in (alice / password):\n   %s", authURL)
 	openBrowser(authURL)
 
-	// 2. wait for the loopback redirect
-	code, err := waitForCode(ctx, redirect, state)
+	code, err := waitForCode(ctx, c.redirect, state)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	step(2, "received code on %s", redirect)
+	c.logf("received code on %s", c.redirect)
 
-	// 3. redeem the code
-	tok, err := cfg.Exchange(ctx, code, oauth2.VerifierOption(verifier))
+	tok, err := c.cfg.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
-		return fmt.Errorf("exchange: %w", err)
+		return nil, fmt.Errorf("exchange: %w", err)
 	}
 
-	step(3, "token exchange OK: access token expires %s", tok.Expiry.Format(time.TimeOnly))
+	c.logf("token exchange OK: access token expires %s", tok.Expiry.Format(time.TimeOnly))
 
-	// 4. call the API
-	if err := whoami(ctx, base, tok.AccessToken); err != nil {
-		return err
+	if err := c.whoami(ctx, tok.AccessToken); err != nil {
+		return nil, err
 	}
 
-	step(4, "whoami OK")
+	c.logf("whoami OK")
 
-	if pause {
-		fmt.Println("   paused: end alice's offline session in the Keycloak admin, then press Enter")
-		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
-	}
+	return tok, nil
+}
 
-	// 5. refresh
-	refreshed, err := cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: tok.RefreshToken}).Token()
+func (c *client) refresh(ctx context.Context, refreshToken string) (*oauth2.Token, error) {
+	return c.cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken}).Token()
+}
+
+// refreshOK refreshes and requires success.
+func (c *client) refreshOK(ctx context.Context, refreshToken, what string) (*oauth2.Token, error) {
+	tok, err := c.refresh(ctx, refreshToken)
 	if err != nil {
-		return fmt.Errorf("refresh: %w", err)
+		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 
-	step(5, "refresh OK: refresh token changed: %t", refreshed.RefreshToken != tok.RefreshToken)
+	c.logf("%s OK: refresh token changed: %t", what, tok.RefreshToken != refreshToken)
 
-	// 6. call the API with the new token
-	if err := whoami(ctx, base, refreshed.AccessToken); err != nil {
-		return err
+	return tok, nil
+}
+
+// refreshFails refreshes and requires the given OAuth error.
+func (c *client) refreshFails(ctx context.Context, refreshToken, wantCode, what string) error {
+	_, err := c.refresh(ctx, refreshToken)
+	if err := expectOAuthError(err, wantCode); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
 	}
 
-	step(6, "whoami with refreshed token OK")
-
-	// 7. reuse detection or revoke
-	if demoReuse {
-		// inside the rotation grace window (10s) the old token still works,
-		// so concurrent refreshes from one app both succeed
-		fmt.Println("   waiting 11s for the rotation grace window to close ...")
-		time.Sleep(11 * time.Second)
-
-		_, err := cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: tok.RefreshToken}).Token()
-		step(7, "replaying the OLD refresh token: %s", describe(err))
-
-		_, err = cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshed.RefreshToken}).Token()
-		fmt.Printf("   the CURRENT refresh token now fails too (session revoked): %s\n", describe(err))
-
-		return nil
-	}
-
-	if err := revoke(ctx, base, clientID, refreshed.RefreshToken); err != nil {
-		return err
-	}
-
-	_, err = cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshed.RefreshToken}).Token()
-	step(7, "revoked; refreshing again: %s", describe(err))
+	c.logf("%s: %s as expected", what, wantCode)
 
 	return nil
 }
 
-// describe names the OAuth error, or says the call unexpectedly worked.
-func describe(err error) string {
+// revokeAndConfirm revokes the session and checks the token is dead.
+func (c *client) revokeAndConfirm(ctx context.Context, refreshToken string) error {
+	if err := c.revoke(ctx, refreshToken); err != nil {
+		return err
+	}
+
+	c.logf("revoked")
+
+	return c.refreshFails(ctx, refreshToken, "invalid_grant", "refresh after revoke")
+}
+
+// scenarioBasic: login, whoami, refresh, whoami, revoke.
+func scenarioBasic(ctx context.Context, c *client) error {
+	tok, err := c.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	refreshed, err := c.refreshOK(ctx, tok.RefreshToken, "refresh")
+	if err != nil {
+		return err
+	}
+
+	if err := c.whoami(ctx, refreshed.AccessToken); err != nil {
+		return err
+	}
+
+	c.logf("whoami with refreshed token OK")
+
+	return c.revokeAndConfirm(ctx, refreshed.RefreshToken)
+}
+
+// scenarioReuse: replaying an old refresh token after the grace window
+// revokes the whole session.
+func scenarioReuse(ctx context.Context, c *client) error {
+	tok, err := c.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	refreshed, err := c.refreshOK(ctx, tok.RefreshToken, "refresh")
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("   waiting %s for the rotation grace window to close ...\n", graceWait)
+	time.Sleep(graceWait)
+
+	if err := c.refreshFails(ctx, tok.RefreshToken, "invalid_grant", "replay of the OLD refresh token"); err != nil {
+		return err
+	}
+
+	return c.refreshFails(ctx, refreshed.RefreshToken, "invalid_grant", "CURRENT refresh token after reuse (session revoked)")
+}
+
+// scenarioConcurrent: two refreshes with the same token at once both
+// succeed, and the response that completes last stays valid after the grace
+// window.
+func scenarioConcurrent(ctx context.Context, c *client) error {
+	tok, err := c.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		last *oauth2.Token
+		errs []error
+	)
+
+	for i := range 2 {
+		wg.Go(func() {
+			got, err := c.refresh(ctx, tok.RefreshToken)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				errs = append(errs, fmt.Errorf("concurrent refresh %d: %w", i+1, err))
+				return
+			}
+
+			last = got
+		})
+	}
+
+	wg.Wait()
+
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+
+	c.logf("two concurrent refreshes with the same token both succeeded")
+
+	fmt.Printf("   waiting %s for the rotation grace window to close ...\n", graceWait)
+	time.Sleep(graceWait)
+
+	current, err := c.refreshOK(ctx, last.RefreshToken, "refresh with the last response's token")
+	if err != nil {
+		return err
+	}
+
+	return c.revokeAndConfirm(ctx, current.RefreshToken)
+}
+
+// scenarioOutage: an unreachable IdP answers 503 and keeps the session; the
+// same refresh token works once the IdP is back.
+func scenarioOutage(ctx context.Context, c *client) error {
+	tok, err := c.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	pause("in another terminal run `make sandbox.idp.stop`")
+
+	if err := c.refreshFails(ctx, tok.RefreshToken, "temporarily_unavailable", "refresh while the IdP is down"); err != nil {
+		return err
+	}
+
+	pause("now run `make sandbox.idp.start` (it returns once Keycloak is healthy)")
+
+	fmt.Printf("   waiting %s so the retry is outside the grace window ...\n", graceWait)
+	time.Sleep(graceWait)
+
+	refreshed, err := c.refreshOK(ctx, tok.RefreshToken, "retry with the SAME refresh token")
+	if err != nil {
+		return err
+	}
+
+	return c.revokeAndConfirm(ctx, refreshed.RefreshToken)
+}
+
+// scenarioSignout: ending the session at the IdP ends the native session at
+// its next refresh.
+func scenarioSignout(ctx context.Context, c *client) error {
+	tok, err := c.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	pause("in another terminal run `make sandbox.idp.signout` (or sign out alice's offline session in the Keycloak admin, http://localhost:8081)")
+
+	return c.refreshFails(ctx, tok.RefreshToken, "invalid_grant", "refresh after the IdP ended the session")
+}
+
+// scenarioRestart: sessions live in MongoDB, so they survive a restart of
+// the service.
+func scenarioRestart(ctx context.Context, c *client) error {
+	tok, err := c.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	pause("restart the demo app: Ctrl-C the `make sandbox.run` terminal, start it again and wait for \"sandbox listening\"")
+
+	refreshed, err := c.refreshOK(ctx, tok.RefreshToken, "refresh after the restart")
+	if err != nil {
+		return err
+	}
+
+	return c.revokeAndConfirm(ctx, refreshed.RefreshToken)
+}
+
+func pause(msg string) {
+	fmt.Printf("   ⏸  %s, then press Enter\n", msg)
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+}
+
+// expectOAuthError checks err is an RFC 6749 error with the given code.
+func expectOAuthError(err error, wantCode string) error {
 	var rerr *oauth2.RetrieveError
 	if errors.As(err, &rerr) {
-		return fmt.Sprintf("%s (%s) as expected", rerr.ErrorCode, rerr.ErrorDescription)
+		if rerr.ErrorCode == wantCode {
+			return nil
+		}
+
+		return fmt.Errorf("want %s, got %s (%s)", wantCode, rerr.ErrorCode, rerr.ErrorDescription)
 	}
 
 	if err != nil {
-		return err.Error()
+		return fmt.Errorf("want %s, got %w", wantCode, err)
 	}
 
-	return "unexpectedly succeeded"
+	return fmt.Errorf("want %s, but the call succeeded", wantCode)
 }
 
 func randomState() string {
@@ -233,8 +432,8 @@ func waitForCode(ctx context.Context, redirect, state string) (string, error) {
 	}
 }
 
-func whoami(ctx context.Context, base, accessToken string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/app/whoami", nil)
+func (c *client) whoami(ctx context.Context, accessToken string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/app/whoami", nil)
 	if err != nil {
 		return err
 	}
@@ -257,17 +456,8 @@ func whoami(ctx context.Context, base, accessToken string) error {
 	return nil
 }
 
-func revoke(ctx context.Context, base, clientID, refreshToken string) error {
-	form := url.Values{"token": {refreshToken}, "client_id": {clientID}}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/oidc/app/revoke", strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := http.DefaultClient.Do(req)
+func (c *client) revoke(ctx context.Context, refreshToken string) error {
+	resp, err := c.postForm(ctx, "/oidc/app/revoke", url.Values{"token": {refreshToken}, "client_id": {c.clientID}})
 	if err != nil {
 		return fmt.Errorf("revoke: %w", err)
 	}
@@ -279,4 +469,15 @@ func revoke(ctx context.Context, base, clientID, refreshToken string) error {
 	}
 
 	return nil
+}
+
+func (c *client) postForm(ctx context.Context, path string, form url.Values) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	return http.DefaultClient.Do(req)
 }

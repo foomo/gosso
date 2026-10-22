@@ -90,10 +90,13 @@ make test             # go test across all modules (via go.work)
 make check            # tidy + generate + lint + test + audit
 make godocs           # serve pkg.go.dev-style godoc locally
 
-make sandbox.up       # docker compose up keycloak at :8081
+make sandbox.up       # keycloak :8081 + mongo :27017, waits until healthy
+make sandbox.status   # container health; sandbox.logs ARGS=keycloak|mongo follows logs
 make sandbox.down     # docker compose down -v
 make sandbox.run      # run demo app at :8080 (cwd=examples)
-make sandbox.app      # native-app CLI client against the demo app (ARGS=-demo-reuse|-pause)
+make sandbox.app      # native client: login, refresh, revoke (PASS/FAIL); also .check .reuse .concurrent .outage .signout .restart
+make sandbox.idp.stop / sandbox.idp.start / sandbox.idp.signout   # IdP outage / offline-session sign-out
+make sandbox.mongo    # broker codes, sessions, indexes
 make sandbox.certs    # regenerate dev SP cert pair
 
 make docs             # vitepress dev server (docs/)
