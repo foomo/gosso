@@ -1,6 +1,6 @@
 // Sandbox demo: one binary that mounts both the SAML and OIDC adapters
 // against a local Keycloak. Run `make sandbox.up` first to start
-// Keycloak, then `make sandbox.run` to start this app on
+// Keycloak and MongoDB, then `make sandbox.run` to start this app on
 // http://localhost:8080.
 package main
 
@@ -13,13 +13,18 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	keelmongo "github.com/foomo/keel/persistence/mongo"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	sso "github.com/foomo/gosso"
 	"github.com/foomo/gosso/oidc"
+	"github.com/foomo/gosso/oidc/native"
+	nativerepository "github.com/foomo/gosso/oidc/native/repository"
+	nativestore "github.com/foomo/gosso/oidc/native/repository/store"
 	"github.com/foomo/gosso/saml"
 )
 
@@ -32,6 +37,16 @@ const (
 	sessionCookieName = "gosso_sandbox_session"
 	certPath          = "sandbox/certs/sp.crt"
 	keyPath           = "sandbox/certs/sp.key"
+
+	// Native-app broker: the nativeapp CLI is a public client that logs in
+	// through the OIDC RP above and gets a loopback redirect (RFC 8252).
+	nativeClientID      = "sandbox-cli"
+	nativeRedirectURI   = "http://127.0.0.1:8090/callback"
+	nativeEncryptionKey = "sandbox-native-key-not-for-prod!" // exactly 32 bytes
+	nativeAccessTTL     = 2 * time.Minute                    // short, so refresh is quick to demo
+
+	// MongoDB from docker-compose, where the broker keeps codes and sessions.
+	mongoURI = "mongodb://localhost:27017/gosso_sandbox"
 )
 
 // subject is the normalised view we stash in the in-memory session.
@@ -101,6 +116,53 @@ func (s *sessionStore) clear(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// accessToken is what an opaque native access token stands for.
+type accessToken struct {
+	SessionID  string                 `json:"session_id"`
+	Subject    nativestore.Subject    `json:"subject"`
+	Attributes nativestore.Attributes `json:"attributes"`
+	ExpiresAt  time.Time              `json:"expires_at"`
+}
+
+// accessTokenStore holds the opaque access tokens the broker's Mint hook
+// hands out. A real service would mint a signed JWT instead.
+type accessTokenStore struct {
+	mu sync.Mutex
+	m  map[string]accessToken
+}
+
+func newAccessTokenStore() *accessTokenStore {
+	return &accessTokenStore{m: make(map[string]accessToken)}
+}
+
+func (a *accessTokenStore) mint(_ context.Context, s nativestore.Session) (native.Tokens, error) {
+	token := randomID()
+
+	a.mu.Lock()
+	a.m[token] = accessToken{
+		SessionID:  s.ID,
+		Subject:    s.Subject,
+		Attributes: s.Attributes,
+		ExpiresAt:  time.Now().Add(nativeAccessTTL),
+	}
+	a.mu.Unlock()
+
+	return native.Tokens{AccessToken: token, ExpiresIn: nativeAccessTTL}, nil
+}
+
+func (a *accessTokenStore) get(token string) (accessToken, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	at, ok := a.m[token]
+	if !ok || time.Now().After(at.ExpiresAt) {
+		delete(a.m, token)
+		return accessToken{}, false
+	}
+
+	return at, true
+}
+
 func randomID() string {
 	var b [32]byte
 	_, _ = rand.Read(b[:])
@@ -110,12 +172,17 @@ func randomID() string {
 func main() {
 
 	store := newSessionStore()
+	accessTokens := newAccessTokenStore()
 
 	samlSP, err := newSAMLSP(store)
 	if err != nil {
 		log.Fatalf("saml init: %v", err)
 	}
-	oidcRP, err := newOIDCRP(store)
+	persistor, err := keelmongo.New(context.Background(), mongoURI)
+	if err != nil {
+		log.Fatalf("mongo: %v", err)
+	}
+	oidcRP, broker, err := newOIDCRP(store, accessTokens, persistor)
 	if err != nil {
 		log.Fatalf("oidc init: %v", err)
 	}
@@ -134,6 +201,13 @@ func main() {
 	mux.Handle("/oidc/login", oidcH.Login)
 	mux.Handle("/oidc/callback", oidcH.Callback)
 	mux.Handle("/oidc/logout", oidcH.Logout)
+
+	// Native-app broker (see ../nativeapp)
+	nativeH := broker.Handlers()
+	mux.Handle("/oidc/app/authorize", nativeH.Authorize)
+	mux.Handle("/oidc/app/token", nativeH.Token)
+	mux.Handle("/oidc/app/revoke", nativeH.Revoke)
+	mux.HandleFunc("/app/whoami", appWhoamiHandler(accessTokens))
 
 	// Demo endpoints
 	mux.HandleFunc("/", rootHandler(store))
@@ -214,8 +288,39 @@ func newSAMLSP(store *sessionStore) (*saml.SP, error) {
 	return nil, err
 }
 
-func newOIDCRP(store *sessionStore) (*oidc.RP, error) {
+func newOIDCRP(store *sessionStore, accessTokens *accessTokenStore, persistor *keelmongo.Persistor) (*oidc.RP, *native.Broker, error) {
 	issuer := fmt.Sprintf("%s/realms/%s", keycloakBaseURL, realm)
+
+	codes, err := nativerepository.NewDefaultCode(persistor)
+	if err != nil {
+		return nil, nil, fmt.Errorf("native codes: %w", err)
+	}
+
+	sessions, err := nativerepository.NewDefaultSession(persistor)
+	if err != nil {
+		return nil, nil, fmt.Errorf("native sessions: %w", err)
+	}
+
+	// The broker comes first: the RP needs its wrapped hooks, and the
+	// broker gets the RP through Attach once it exists.
+	broker, err := native.New(
+		codes,
+		sessions,
+		native.Hooks{
+			Authenticate: func(_ context.Context, _ *http.Request, _ sso.Subject[oidc.Payload]) (nativestore.Attributes, error) {
+				// a real service would upsert the customer here
+				return nativestore.Attributes{"loggedInAt": time.Now().Format(time.RFC3339)}, nil
+			},
+			Mint: accessTokens.mint,
+		},
+		[]native.Client{{ID: nativeClientID, RedirectURIs: []string{nativeRedirectURI}}},
+		[]byte(nativeEncryptionKey),
+		native.WithErrorLogger(bridgeErrorLogger),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("native broker: %w", err)
+	}
+
 	onAuth := func(_ context.Context, w http.ResponseWriter, _ *http.Request, s sso.Subject[oidc.Payload]) error {
 		store.set(w, subject{
 			Protocol:   "oidc",
@@ -229,10 +334,7 @@ func newOIDCRP(store *sessionStore) (*oidc.RP, error) {
 		})
 		return nil
 	}
-	var (
-		rp  *oidc.RP
-		err error
-	)
+	var rp *oidc.RP
 	for i := 0; i < 20; i++ {
 		rp, err = oidc.New(
 			context.Background(),
@@ -241,8 +343,10 @@ func newOIDCRP(store *sessionStore) (*oidc.RP, error) {
 			oidcClientSecret,
 			appURL+"/oidc/callback",
 			[]byte("sandbox-not-for-production-use-only"),
-			onAuth,
+			broker.OnAuthenticated(onAuth),
 			oidc.WithExtraScopes("offline_access"),
+			oidc.WithOnRedirect(broker.OnRedirect(nil)),
+			oidc.WithOnLoginError(broker.OnLoginError(nil)),
 			oidc.WithOnLogout(func(_ context.Context, w http.ResponseWriter, r *http.Request) error {
 				store.clear(w, r)
 				return nil
@@ -258,12 +362,15 @@ func newOIDCRP(store *sessionStore) (*oidc.RP, error) {
 			oidc.WithErrorLogger(bridgeErrorLogger),
 		)
 		if err == nil {
-			return rp, nil
+			if err := broker.Attach(rp); err != nil {
+				return nil, nil, err
+			}
+			return rp, broker, nil
 		}
 		log.Printf("oidc init attempt %d/20 failed: %v", i+1, err)
 		time.Sleep(3 * time.Second)
 	}
-	return nil, err
+	return nil, nil, err
 }
 
 var rootTmpl = template.Must(template.New("root").Parse(`<!doctype html>
@@ -340,6 +447,22 @@ func whoamiHandler(store *sessionStore) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(sub)
+	}
+}
+
+// appWhoamiHandler answers the native app's bearer-authenticated calls
+// with what its access token stands for.
+func appWhoamiHandler(accessTokens *accessTokenStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		at, valid := accessTokens.get(token)
+		if !ok || !valid {
+			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(at)
 	}
 }
 

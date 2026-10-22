@@ -15,8 +15,22 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /realms/gosso-sandbox/.well-known/openid-configuration HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q '200 OK'"
+        # HTTP/1.1 with a Host header: Keycloak 26 answers a Host-less
+        # HTTP/1.0 request with a 500 (NPE on the request authority)
+        - "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /realms/gosso-sandbox/.well-known/openid-configuration HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q '200 OK'"
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 30s
+
+  mongo:
+    image: mongo:7
+    container_name: gosso-sandbox-mongo
+    ports:
+      # the native broker keeps one-time codes and refresh sessions here
+      - "27017:27017"
+    healthcheck:
+      test: [ "CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok" ]
+      interval: 5s
+      timeout: 5s
+      retries: 30

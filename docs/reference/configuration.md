@@ -58,6 +58,41 @@ column.
 | `WithOnLogout(fn)` | no-op | Invoked when `/oidc/logout` is hit. |
 | `WithErrorLogger(fn)` | silent | Routes runtime errors from the OIDC handlers to the supplied logger. |
 | `WithLogoutHintProvider(fn)` | | Returns the raw ID token for `id_token_hint` on RP-initiated logout. Called *before* `OnLogout`. |
+| `WithOnRedirect(fn)` | redirect to `target` | Computes the post-login destination. The returned URL is not sanitised. |
+| `WithOnLoginError(fn)` | plain HTTP error | Runs on callback failures after the `state` check; a non-empty return is a 302 target (not sanitised). |
 | `WithPostLogoutRedirectURL(string)` | | Sent as `post_logout_redirect_uri`. |
 | `WithHTTPClient(*http.Client)` | instrumented, 15s timeout | Used for discovery, token, and UserInfo calls. |
 | `WithBootstrapTimeout(duration)` | `30s` | Bounds the time `New` will spend on OIDC discovery. |
+
+## `native.New(store, hooks, clients, encryptionKey, opts ...Option)`
+
+See [Native apps](../guide/native).
+
+### Required parameters
+
+| Parameter | Type | Purpose |
+| --- | --- | --- |
+| `store` | `native.Store` | Codes and refresh sessions. `native.NewMemoryStore()` or `mongostore.New(...)`. |
+| `hooks` | `native.Hooks` | `Authenticate` (login and every refresh) and `Mint` (access tokens). Both required. |
+| `clients` | `[]native.Client` | Registered apps: unique `ID`, at least one exact `RedirectURIs` entry (scheme required, no fragment). |
+| `encryptionKey` | `[]byte` | AES-256-GCM key for stored IdP refresh tokens. Exactly 32 bytes. |
+
+### Options
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `WithCodeTTL(duration)` | `60s` | Lifetime of a one-time code. |
+| `WithSessionTTL(duration)` | `90 days` | Absolute lifetime of a refresh session. |
+| `WithRotationGrace(duration)` | `10s` | How long the previous refresh token keeps working after a rotation. `0` disables. |
+| `WithDeprecatedEncryptionKeys(...[]byte)` | | Previous 32-byte keys that still decrypt. Empty entries are skipped. |
+| `WithErrorLogger(fn)` | silent | Routes runtime errors to the supplied logger. |
+| `WithClock(func() time.Time)` | `time.Now` | For tests. |
+
+## `mongostore.New(persistor *keelmongo.Persistor, opts ...Option)`
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `WithCodesCollection(string)` | `gosso_native_codes` | Codes collection. |
+| `WithSessionsCollection(string)` | `gosso_native_sessions` | Sessions collection. |
+
+Both collections get a TTL index on `expiresAt` (`expireAfterSeconds: 0`).

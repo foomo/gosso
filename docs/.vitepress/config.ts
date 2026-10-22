@@ -26,6 +26,7 @@ export default defineConfig({
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'SAML', link: '/guide/saml' },
             { text: 'OIDC', link: '/guide/oidc' },
+            { text: 'Native apps', link: '/guide/native' },
             { text: 'Sandbox', link: '/guide/sandbox' },
             { text: 'Migrating', link: '/guide/migrating' },
           ],

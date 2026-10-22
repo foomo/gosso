@@ -12,14 +12,20 @@ import (
 	"time"
 )
 
+// maxTransitCookieBytes bounds name + value of the transit cookie. Browsers
+// drop cookies over ~4096 bytes without telling anyone, which surfaces as
+// an opaque "invalid callback state"; failing at login is clearer.
+const maxTransitCookieBytes = 4000
+
 // transitData is the payload stored in the signed transit cookie.
 // Short-lived; carries no long-term identity information.
 type transitData struct {
-	State        string `json:"s"`
-	Nonce        string `json:"n"`
-	CodeVerifier string `json:"v"`
-	Target       string `json:"t,omitempty"`
-	IssuedAt     int64  `json:"iat"`
+	State        string       `json:"s"`
+	Nonce        string       `json:"n"`
+	CodeVerifier string       `json:"v"`
+	Target       string       `json:"t,omitempty"`
+	Context      LoginContext `json:"c,omitempty"`
+	IssuedAt     int64        `json:"iat"`
 }
 
 // transitCodec wraps an HMAC signing key (and optional deprecated keys
@@ -54,7 +60,14 @@ func (c *transitCodec) write(w http.ResponseWriter, d transitData) error {
 	payload := base64.RawURLEncoding.EncodeToString(body)
 	sig := sign(c.signingKey, payload)
 	value := payload + "." + sig
-	http.SetCookie(w, &http.Cookie{
+
+	if len(c.name)+len(value) > maxTransitCookieBytes {
+		return fmt.Errorf("transit cookie too large: %d bytes (max %d); shrink the login context", len(c.name)+len(value), maxTransitCookieBytes)
+	}
+
+	// Secure follows the callback scheme: https in production, plain http
+	// only for loopback development (see requireSecureURL).
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure is set for https callback URLs
 		Name:     c.name,
 		Value:    value,
 		Path:     c.path,
@@ -124,7 +137,7 @@ func (c *transitCodec) verify(payload, sig string) bool {
 
 // delete clears the transit cookie from the browser.
 func (c *transitCodec) delete(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure is set for https callback URLs
 		Name:     c.name,
 		Value:    "",
 		Path:     c.path,

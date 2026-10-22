@@ -14,5 +14,16 @@ When the first breaking change lands, the pattern will be:
 ... before / after code examples ...
 ```
 
+## Unreleased
+
+- **Go 1.27 is the minimum version.** `github.com/foomo/keel/persistence/mongo`
+  (used by the native broker's repositories in `oidc/native/repository`)
+  requires it.
+- No API breaks: login context, `WithOnLoginError`, `RP.Refresh` and the
+  `oidc/native` broker are additions. Without a login context or
+  `WithOnLoginError`, the web flow behaves exactly as before.
+- The destination returned by `OnRedirect` was never sanitised; this is
+  now documented as intended (the consumer owns it).
+
 Follow [the release notes on GitHub](https://github.com/foomo/gosso/releases)
 for a summary of every release.

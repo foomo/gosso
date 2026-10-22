@@ -139,3 +139,20 @@ func TestUnsupportedScopes(t *testing.T) {
 	assert.Nil(t, unsupportedScopes(requested, []string{scopeOpenID, scopeProfile, scopeEmail, scopeOfflineAccess}))
 	assert.Nil(t, unsupportedScopes(requested, nil), "no scopes_supported, nothing to check")
 }
+
+func TestWithOnLoginError(t *testing.T) {
+	t.Parallel()
+
+	rp, err := apply(t)
+	require.NoError(t, err)
+	assert.Nil(t, rp.onLoginError, "unset by default")
+
+	rp, err = apply(t, WithOnLoginError(func(_ context.Context, _ http.ResponseWriter, _ *http.Request, lc LoginContext, stage string, _ error) string {
+		return "app:/cb?stage=" + stage + "&k=" + lc["k"]
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, rp.onLoginError)
+
+	got := rp.onLoginError(context.Background(), nil, nil, LoginContext{"k": "v"}, StageIDPError, nil)
+	assert.Equal(t, "app:/cb?stage=idp-error&k=v", got)
+}

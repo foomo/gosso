@@ -100,8 +100,101 @@ Semantics:
 - Returning an error aborts the callback (HTTP 500) — the redirect is not sent.
 - When the option is unset, behaviour is unchanged (redirect to `target`).
 
-The open-redirect guard still applies: `target` is always a safe relative path.
-It is your responsibility to keep any rewritten destination relative.
+The open-redirect guard still applies to `target`: it is always a safe
+relative path. **The destination `OnRedirect` returns is not sanitised**:
+you own it. Keep it relative unless you mean to leave the site; the
+[native broker](./native) deliberately redirects to app schemes.
+
+## Starting a login from code (`RP.Login`, login context)
+
+`Handlers().Login` is `RP.Login` with the target taken from `?target=`. Call
+`RP.Login` yourself to start a login from your own handler, and attach a
+login context, which `OnAuthenticated`, `OnRedirect` and `OnLoginError`
+see again on the callback:
+
+```go
+mux.HandleFunc("/partner/login", func(w http.ResponseWriter, r *http.Request) {
+    rp.Login(w, r,
+        oidc.WithLoginTarget("/partner"), // sanitised like ?target=
+        oidc.WithLoginContext(oidc.LoginContext{"partner": r.URL.Query().Get("p")}),
+    )
+})
+
+// in OnAuthenticated / OnRedirect:
+if lc, ok := oidc.LoginContextFromContext(ctx); ok {
+    partner := lc["partner"]
+}
+```
+
+The login context is a `map[string]string` carried in the transit cookie.
+It is **signed, not encrypted**: the browser can read it, so never put
+secrets in it. Keep it small: browsers silently drop cookies over about
+4 KB, so `Login` answers `500` (stage `transit-write`) when the cookie
+would exceed 4000 bytes. It reaches the hooks only after the callback has verified
+the transit cookie and `state`.
+
+`oidc.WithLoginInitError(func(w, r, err))` replaces that `500` for any
+failure to start the login (cookie too large, random generation failed);
+the function owns the response. The native broker uses it to redirect
+the app with `error=server_error`.
+
+## Redirecting on callback errors (`WithOnLoginError`)
+
+By default a failed callback answers with a plain HTTP error. Supply
+`oidc.WithOnLoginError` to redirect instead:
+
+```go
+oidc.WithOnLoginError(func(ctx context.Context, w http.ResponseWriter, r *http.Request,
+    lc oidc.LoginContext, stage string, err error) string {
+    if stage == oidc.StageIDPError && r.URL.Query().Get("error") == "access_denied" {
+        return "/login-cancelled"
+    }
+    return "" // keep the default error response
+}),
+```
+
+- It runs for every failure **after** the transit cookie and `state` were
+  verified: `oidc.StageIDPError` (the IdP redirected back with `?error=`),
+  `token-exchange`, `verify-id-token`, `on-authenticated`, `on-redirect`,
+  and so on. `lc` is that login's context.
+- Failures before that (missing, tampered or expired transit cookie,
+  `state` mismatch) never reach it: the context cannot be trusted there.
+- A non-empty return is a `302` target, **not sanitised**. `""` keeps the
+  default response.
+- Telemetry and the `ErrorLogger` fire as before.
+
+## Refreshing (`RP.Refresh`)
+
+`RP.Refresh` redeems an IdP refresh token (request `offline_access`) and
+returns a freshly verified subject:
+
+```go
+sub, err := rp.Refresh(ctx, storedRefreshToken, session.ExternalID)
+switch {
+case errors.Is(err, oidc.ErrRefreshRejected):
+    // the IdP answered invalid_grant: the session is over
+case err != nil:
+    // transient (network, 5xx, malformed response, subject changed): retry later.
+    // If the grant succeeded before a later step failed, the IdP may have
+    // retired the old token: keep the one it issued.
+    var rfe *oidc.RefreshFailedError
+    if errors.As(err, &rfe) {
+        store(rfe.RefreshToken)
+    }
+default:
+    store(sub.Raw.RefreshToken) // rotated, or the input when the IdP did not rotate
+}
+```
+
+- The subject is rebuilt from the refreshed ID token, or from UserInfo when
+  the IdP returns none; `WithUserInfo(true)` always merges UserInfo in.
+- Its `ExternalID` must equal the one you pass, or `Refresh` fails (not as
+  `ErrRefreshRejected`).
+- `Refresh` does not call the `ErrorLogger` (there is no request); log
+  the error yourself. Telemetry: span `oidc.refresh`, counter
+  `gosso.oidc.refresh.completed`, histogram `gosso.oidc.refresh.duration`.
+
+The [native broker](./native) is built on `Refresh`.
 
 ## Claims
 
