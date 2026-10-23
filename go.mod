@@ -6,7 +6,7 @@ require (
 	github.com/beevik/etree v1.5.0
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/crewjam/saml v0.5.1
-	github.com/foomo/go v0.10.0
+	github.com/foomo/go v0.11.0
 	github.com/russellhaering/goxmldsig v1.4.0
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0
