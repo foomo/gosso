@@ -45,8 +45,8 @@ mux.Handle("/saml/slo", h.SLO)       // receives the IdP's LogoutResponse
 1. Browser hits `/saml/login?target=/dashboard`.
 2. The login handler sanitises `target` (relative URLs only —
    absolute URLs, scheme-relative URLs, and `javascript:` all fall back
-   to `/`), rewrites the request URL, and calls the crewjam
-   `HandleStartAuthFlow`.
+   to `/`; the query is kept, the fragment dropped), rewrites the request
+   URL, and calls the crewjam `HandleStartAuthFlow`.
 3. A signed relay-state cookie is issued, carrying the original target
    URL. The browser is redirected to the IdP's SSO endpoint.
 4. After the user authenticates at the IdP, the browser POSTs the
