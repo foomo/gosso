@@ -24,7 +24,7 @@ column.
 | `WithAttributeMap(AttributeMap)` | `AzureADAttributeMap` | SAML attribute URIs mapped into `Subject` fields. |
 | `WithOnLogout(fn)` | no-op | Invoked when `/saml/logout` is hit. |
 | `WithErrorLogger(fn)` | silent | Routes runtime errors from the SAML handlers to the supplied logger. |
-| `WithSLOHintProvider(fn)` | | Returns `(nameID, sessionIndex)` for SP-initiated SLO. Called *before* `OnLogout`. Without it, logout is local-only. |
+| `WithSLOHintProvider(fn)` | | Returns `(nameID, sessionIndex)` for SP-initiated SLO. Called *before* `OnLogout`. An empty `sessionIndex` asks the IdP to end all of the principal's sessions, a set one only that session. Without it, logout is local-only. |
 | `WithPostLogoutRedirectURL(url)` | `/` | Where the `SLO` handler redirects after the IdP's LogoutResponse. |
 | `WithHTTPClient(*http.Client)` | instrumented, 15s timeout | Used for IdP metadata fetch. |
 | `WithBootstrapTimeout(duration)` | `30s` | Bounds the time `New` will spend fetching IdP metadata. |
@@ -47,7 +47,8 @@ column.
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `WithExtraScopes(...string)` | | Added to `{openid, profile, email}`. Use `offline_access` for refresh tokens. |
+| `WithScopes(...string)` | `{openid, profile, email}` | Replaces the default scope set; `openid` is always kept. For IdPs that reject a scope they do not offer, e.g. `email`. |
+| `WithExtraScopes(...string)` | | Added to the scope set. Use `offline_access` for refresh tokens. |
 | `WithClaimMap(ClaimMap)` | `StandardClaimMap` | Claim-name → `Subject` field mapping. |
 | `WithUserInfo(bool)` | `false` | Fetch `/userinfo` after token exchange; claims override ID token. |
 | `WithIssuerValidator(fn)` | strict eq | Custom issuer check (e.g. for Entra ID multi-tenant). |

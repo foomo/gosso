@@ -1,9 +1,12 @@
 package oidc
 
 import (
+	"context"
+	"net/http"
 	"strings"
 	"testing"
 
+	sso "github.com/foomo/gosso"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,6 +22,24 @@ func apply(t *testing.T, opts ...Option) (*RP, error) {
 	}
 
 	return rp, nil
+}
+
+func TestWithOnRedirect(t *testing.T) {
+	t.Parallel()
+
+	rp, err := apply(t)
+	require.NoError(t, err)
+	assert.Nil(t, rp.onRedirect, "unset by default")
+
+	rp, err = apply(t, WithOnRedirect(func(_ context.Context, _ http.ResponseWriter, _ *http.Request, _ sso.Subject[Payload], target string) (string, error) {
+		return target + "?merged=1", nil
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, rp.onRedirect)
+
+	got, err := rp.onRedirect(context.Background(), nil, nil, sso.Subject[Payload]{}, "/account")
+	require.NoError(t, err)
+	assert.Equal(t, "/account?merged=1", got)
 }
 
 func TestWithTransitDeprecatedKeys_MinLength(t *testing.T) {
@@ -49,4 +70,72 @@ func TestWithBootstrapTimeout_Positive(t *testing.T) {
 
 	_, err = apply(t, WithBootstrapTimeout(-1))
 	require.Error(t, err)
+}
+
+// scope names the scope tests below assert on
+const (
+	scopeOpenID        = "openid"
+	scopeProfile       = "profile"
+	scopeEmail         = "email"
+	scopeOfflineAccess = "offline_access"
+)
+
+func TestWithScopes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default set", func(t *testing.T) {
+		t.Parallel()
+
+		rp, err := apply(t, WithExtraScopes(scopeOfflineAccess))
+		require.NoError(t, err)
+		assert.Equal(t, []string{scopeOpenID, scopeProfile, scopeEmail, scopeOfflineAccess}, rp.scopes())
+	})
+
+	t.Run("replaced set keeps openid and the extra scopes", func(t *testing.T) {
+		t.Parallel()
+
+		// e.g. an IdP that rejects the whole request over `email`
+		rp, err := apply(t, WithScopes(scopeProfile), WithExtraScopes(scopeOfflineAccess))
+		require.NoError(t, err)
+		assert.Equal(t, []string{scopeOpenID, scopeProfile, scopeOfflineAccess}, rp.scopes())
+	})
+
+	t.Run("openid listed explicitly is not duplicated", func(t *testing.T) {
+		t.Parallel()
+
+		rp, err := apply(t, WithScopes(scopeOpenID, scopeProfile))
+		require.NoError(t, err)
+		assert.Equal(t, []string{scopeOpenID, scopeProfile}, rp.scopes())
+	})
+
+	t.Run("an empty replacement still requests openid", func(t *testing.T) {
+		t.Parallel()
+
+		rp, err := apply(t, WithScopes())
+		require.NoError(t, err)
+		assert.Equal(t, []string{scopeOpenID}, rp.scopes())
+	})
+
+	t.Run("the default set is not aliased", func(t *testing.T) {
+		t.Parallel()
+
+		first, err := apply(t, WithExtraScopes("a"))
+		require.NoError(t, err)
+		second, err := apply(t, WithExtraScopes("b"))
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{scopeOpenID, scopeProfile, scopeEmail, "a"}, first.scopes())
+		assert.Equal(t, []string{scopeOpenID, scopeProfile, scopeEmail, "b"}, second.scopes())
+	})
+}
+
+func TestUnsupportedScopes(t *testing.T) {
+	t.Parallel()
+
+	requested := []string{scopeOpenID, scopeProfile, scopeEmail, scopeOfflineAccess}
+
+	assert.Equal(t, []string{scopeEmail},
+		unsupportedScopes(requested, []string{scopeOpenID, scopeProfile, "address", scopeOfflineAccess}))
+	assert.Nil(t, unsupportedScopes(requested, []string{scopeOpenID, scopeProfile, scopeEmail, scopeOfflineAccess}))
+	assert.Nil(t, unsupportedScopes(requested, nil), "no scopes_supported, nothing to check")
 }

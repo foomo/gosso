@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,9 +20,22 @@ const minTransitSigningKeyBytes = 32
 // Option configures an RP.
 type Option = options.OptionE[*RP]
 
+// WithScopes replaces the default {openid, profile, email} scope set.
+// `openid` is always requested, whether listed or not. Use it for an IdP
+// that rejects the whole authorization request over a scope it does not
+// offer — for example one without the `email` scope, whose email then
+// arrives in a claim WithClaimMap has to name. WithExtraScopes still
+// appends to the replaced set.
+func WithScopes(scopes ...string) Option {
+	return func(rp *RP) error {
+		rp.baseScopes = append([]string{}, scopes...)
+		return nil
+	}
+}
+
 // WithExtraScopes appends scopes to the default {openid, profile, email}
-// set. Most commonly used to request `offline_access` for refresh
-// tokens.
+// set, or to the set WithScopes replaced it with. Most commonly used to
+// request `offline_access` for refresh tokens.
 func WithExtraScopes(scopes ...string) Option {
 	return func(rp *RP) error {
 		rp.extraScopes = append(rp.extraScopes, scopes...)
@@ -154,6 +168,35 @@ func WithLogoutHintProvider(fn LogoutHintProvider) Option {
 	}
 }
 
+// OnRedirect computes the post-login redirect destination. It runs after a
+// successful OnAuthenticated, receiving the authenticated subject and the
+// resolved (safe) target from the transit state. Returning a non-empty string
+// overrides the redirect destination; returning "" keeps the default target.
+// Returning an error aborts the callback. It owns the ResponseWriter, so a
+// consumer may set additional cookies (e.g. rebinding a cart on login) before
+// the redirect happens.
+//
+// Keeping the redirect decision here — rather than inside OnAuthenticated —
+// lets the consumer branch on where login was initiated (the target), which
+// OnAuthenticated does not see.
+type OnRedirect func(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	sub sso.Subject[Payload],
+	target string,
+) (finalTarget string, err error)
+
+// WithOnRedirect registers a callback that computes the final post-login
+// redirect target. See OnRedirect. When unset, the callback redirects to the
+// transit target (or "/") unchanged.
+func WithOnRedirect(fn OnRedirect) Option {
+	return func(rp *RP) error {
+		rp.onRedirect = fn
+		return nil
+	}
+}
+
 // WithPostLogoutRedirectURL sets the URL the IdP will redirect back to
 // after a successful RP-initiated logout.
 func WithPostLogoutRedirectURL(u string) Option {
@@ -188,6 +231,16 @@ func WithBootstrapTimeout(d time.Duration) Option {
 
 		rp.bootstrapTimeout = d
 
+		return nil
+	}
+}
+
+// WithDiscoveryBaseURL configures the client to work with a OpenID Connect server deployed at the same local cluster
+// relaxing the requirement to use https as transport protocol but to use http instead for the discovery phase
+// using discoveryBaseURL instead of issuerURL
+func WithDiscoveryBaseURL(discoveryBaseURL string) Option {
+	return func(rp *RP) error {
+		rp.discoveryBaseURL = discoveryBaseURL
 		return nil
 	}
 }

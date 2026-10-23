@@ -2,7 +2,9 @@ package saml
 
 import (
 	"net/http"
+	"net/url"
 
+	"github.com/crewjam/saml"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/foomo/gosso/internal/telemetry"
@@ -10,7 +12,9 @@ import (
 
 // handleLogout redirects the browser to the IdP's SingleLogoutService
 // when an SLO hint is available, and fires OnLogout so the consumer
-// can destroy its session. The hint provider is called *before*
+// can destroy its session. The LogoutRequest carries the hint's
+// SessionIndex when it has one (see SLOHintProvider for what an empty
+// one asks of the IdP). The hint provider is called *before*
 // OnLogout — consumers typically read NameID / SessionIndex from the
 // same session they are about to clear, and reversing the order would
 // leave the hint empty and silently downgrade logout to local-only.
@@ -24,9 +28,9 @@ func (sp *SP) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	logoutStarted.Add(ctx, 1)
 
-	var nameID string
+	var nameID, sessionIndex string
 	if sp.sloHintProvider != nil {
-		nameID, _ = sp.sloHintProvider(r)
+		nameID, sessionIndex = sp.sloHintProvider(r)
 	}
 
 	if err := sp.onLogout(ctx, w, r); err != nil {
@@ -41,7 +45,7 @@ func (sp *SP) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirect, err := sp.middleware.ServiceProvider.MakeRedirectLogoutRequest(nameID, "")
+	redirect, err := makeRedirectLogoutRequest(&sp.middleware.ServiceProvider, nameID, sessionIndex)
 	if err != nil {
 		sp.fail(ctx, r, nil, "make-logout-request", err)
 		http.Error(w, "logout request failed", http.StatusInternalServerError)
@@ -50,6 +54,34 @@ func (sp *SP) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, redirect.String(), http.StatusFound)
+}
+
+// makeRedirectLogoutRequest builds the redirect-binding LogoutRequest
+// URL, with a SessionIndex element when sessionIndex is non-empty.
+//
+// crewjam/saml's MakeRedirectLogoutRequest cannot carry a SessionIndex
+// (its second parameter is the RelayState), so the request is built
+// from MakeLogoutRequest instead. That signs the request as it builds
+// it when signing is configured, so adding the SessionIndex afterwards
+// means signing again, or the signature would not cover it.
+func makeRedirectLogoutRequest(sp *saml.ServiceProvider, nameID, sessionIndex string) (*url.URL, error) {
+	req, err := sp.MakeLogoutRequest(sp.GetSLOBindingLocation(saml.HTTPRedirectBinding), nameID)
+	if err != nil {
+		return nil, err
+	}
+
+	if sessionIndex != "" {
+		req.SessionIndex = &saml.SessionIndex{Value: sessionIndex}
+
+		if sp.SignatureMethod != "" {
+			req.Signature = nil
+			if err := sp.SignLogoutRequest(req); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return req.Redirect(""), nil
 }
 
 // handleSLO terminates the SP-initiated single-logout round-trip: the
