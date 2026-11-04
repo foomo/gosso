@@ -16,7 +16,8 @@ import (
 // handleRevoke ends the refresh session a refresh token belongs to (RFC
 // 7009). The client must identify itself with client_id (§2.1). For a
 // known client the answer is 200 whether or not anything was revoked: a
-// malformed, unknown or foreign token reveals nothing.
+// malformed, unknown or foreign token reveals nothing. A repository
+// failure answers 503 (§2.2.1), so the app keeps its token and retries.
 func (b *Broker) handleRevoke(w http.ResponseWriter, r *http.Request, _ *oidc.RP) {
 	ctx, span := telemetry.Tracer().Start(r.Context(), "oidc.native.revoke",
 		trace.WithAttributes(oidcProtocolAttr),
@@ -49,29 +50,44 @@ func (b *Broker) handleRevoke(w http.ResponseWriter, r *http.Request, _ *oidc.RP
 		return
 	}
 
-	defer writeJSON(w, http.StatusOK, struct{}{})
+	if err := b.revoke(r, client, token); err != nil {
+		// RFC 7009 §2.2.1: the token may still be valid, the client retries
+		writeError(w, http.StatusServiceUnavailable, errTemporarilyUnavailable, "revocation failed, retry")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// revoke deletes the session token belongs to, if the session is client's
+// and token one of its current or in-grace refresh tokens. Anything else
+// is a no-op; only a repository failure is an error.
+func (b *Broker) revoke(r *http.Request, client Client, token string) error {
+	ctx := r.Context()
 
 	id, secret, ok := cutToken(token)
 	if !ok {
-		return
+		return nil
 	}
 
 	s, err := b.sessions.Get(ctx, id)
-	if err != nil {
-		if !errors.Is(err, repository.ErrNotFound) {
-			b.logError(r, "native-revoke-get-session", err)
-		}
-
-		return
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil
+	} else if err != nil {
+		b.logError(r, "native-revoke-get-session", err)
+		return err
 	}
 
 	if s.ClientID != client.ID || !b.matchesSession(s, hashToken(secret)) {
-		return
+		return nil
 	}
 
-	if err := b.sessions.Delete(ctx, s.ID); err != nil {
+	if err := b.sessions.Delete(ctx, s.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
 		b.logError(r, "native-revoke-delete-session", err)
+		return err
 	}
+
+	return nil
 }
 
 // matchesSession reports whether h is one of the session's current refresh

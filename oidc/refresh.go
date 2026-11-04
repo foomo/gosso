@@ -23,11 +23,19 @@ import (
 // session it backs is over.
 var ErrRefreshRejected = errors.New("oidc: refresh token rejected")
 
+// ErrRefreshSubjectMismatch means the IdP granted the refresh but the
+// identity it returned is not the expected one: the refreshed subject
+// differs from expectedExternalID, or UserInfo's sub from the ID token's.
+// Retrying cannot fix it, so treat the session as over. It always comes
+// wrapped in a *RefreshFailedError.
+var ErrRefreshSubjectMismatch = errors.New("oidc: refreshed subject mismatch")
+
 // RefreshFailedError is returned by Refresh when the IdP granted the
 // refresh but a later step failed (ID-token verification, UserInfo, subject
 // check, ...). The IdP may already have retired the input token, so store
 // RefreshToken (the token it issued, or the input when it did not rotate)
-// before retrying. It is never ErrRefreshRejected.
+// before retrying. It is never ErrRefreshRejected; a subject mismatch
+// (ErrRefreshSubjectMismatch) is the one failure not worth retrying.
 type RefreshFailedError struct {
 	RefreshToken string
 	Err          error
@@ -41,9 +49,10 @@ func (e *RefreshFailedError) Unwrap() error { return e.Err }
 // the refreshed ID token, or from UserInfo when the IdP returns none; its
 // ExternalID must equal expectedExternalID. Payload.RefreshToken holds the
 // token to store next (rotated, or the input when the IdP did not rotate).
-// ErrRefreshRejected means the IdP answered invalid_grant (session over);
-// any other error is transient. A failure after the grant succeeded is a
-// *RefreshFailedError carrying the refresh token to keep.
+// ErrRefreshRejected means the IdP answered invalid_grant (session over),
+// and so does ErrRefreshSubjectMismatch; any other error is transient. A
+// failure after the grant succeeded is a *RefreshFailedError carrying the
+// refresh token to keep.
 //
 // Refresh does not call the ErrorLogger: there is no request to log
 // against, so the caller logs.
@@ -152,7 +161,7 @@ func (rp *RP) subjectFromRefresh(ctx context.Context, tok *oauth2.Token, next, e
 		}
 
 		if idToken != nil && ui.Subject != idToken.Subject {
-			return sso.Subject[Payload]{}, "userinfo-sub-mismatch", errors.New("userinfo sub != id token sub")
+			return sso.Subject[Payload]{}, "userinfo-sub-mismatch", fmt.Errorf("%w: userinfo sub != id token sub", ErrRefreshSubjectMismatch)
 		}
 
 		userInfo = map[string]any{}
@@ -171,7 +180,7 @@ func (rp *RP) subjectFromRefresh(ctx context.Context, tok *oauth2.Token, next, e
 	}
 
 	if subtle.ConstantTimeCompare([]byte(sub.ExternalID), []byte(expectedExternalID)) != 1 {
-		return sso.Subject[Payload]{}, "subject-mismatch", errors.New("refreshed subject differs from the session's subject")
+		return sso.Subject[Payload]{}, "subject-mismatch", fmt.Errorf("%w: refreshed subject differs from the session's subject", ErrRefreshSubjectMismatch)
 	}
 
 	return sub, "", nil

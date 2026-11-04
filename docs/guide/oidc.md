@@ -182,8 +182,10 @@ sub, err := rp.Refresh(ctx, storedRefreshToken, session.ExternalID)
 switch {
 case errors.Is(err, oidc.ErrRefreshRejected):
     // the IdP answered invalid_grant: the session is over
+case errors.Is(err, oidc.ErrRefreshSubjectMismatch):
+    // the IdP answered for another identity: the session is over too
 case err != nil:
-    // transient (network, 5xx, malformed response, subject changed): retry later.
+    // transient (network, 5xx, malformed response): retry later.
     // If the grant succeeded before a later step failed, the IdP may have
     // retired the old token: keep the one it issued.
     var rfe *oidc.RefreshFailedError
@@ -197,8 +199,9 @@ default:
 
 - The subject is rebuilt from the refreshed ID token, or from UserInfo when
   the IdP returns none; `WithUserInfo(true)` always merges UserInfo in.
-- Its `ExternalID` must equal the one you pass, or `Refresh` fails (not as
-  `ErrRefreshRejected`).
+- Its `ExternalID` must equal the one you pass, and UserInfo's `sub` the
+  ID token's, or `Refresh` fails with `ErrRefreshSubjectMismatch` (wrapped
+  in a `*RefreshFailedError`; not `ErrRefreshRejected`).
 - `Refresh` does not call the `ErrorLogger` (there is no request); log
   the error yourself. Telemetry: span `oidc.refresh`, counter
   `gosso.oidc.refresh.completed`, histogram `gosso.oidc.refresh.duration`.

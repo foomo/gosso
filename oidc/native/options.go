@@ -48,7 +48,12 @@ func WithSessionTTL(d time.Duration) Option {
 
 // WithRotationGrace sets how long the previous refresh tokens keep working
 // after a rotation is stored, so concurrent or retried refreshes from one
-// app all succeed. Default 10s; 0 disables the grace window.
+// app all succeed. Default 10s.
+//
+// 0 disables the grace window: rotation is strict, and a second refresh
+// with the same token counts as reuse and ends the session, even one sent
+// concurrently with the first. Use it only when the app serialises its
+// refreshes and never retries one whose response it lost.
 func WithRotationGrace(d time.Duration) Option {
 	return func(b *Broker) error {
 		if d < 0 {

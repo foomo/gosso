@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -81,6 +82,7 @@ type fixture struct {
 	authenticateErr  error
 	mintErr          error
 	authenticated    []sso.Subject[oidc.Payload]
+	authenticateReqs []error // r.Context().Err() as each Authenticate saw it
 	webAuthCalls     int
 	webRedirectCalls int
 	mints            int
@@ -120,9 +122,11 @@ func newFixtureWithSessions(t *testing.T, wrap func(repository.Session) reposito
 	f.codes, f.sessions = newRepositories(t)
 
 	hooks := Hooks{
-		Authenticate: func(_ context.Context, _ *http.Request, sub sso.Subject[oidc.Payload]) (store.Attributes, error) {
+		Authenticate: func(_ context.Context, r *http.Request, sub sso.Subject[oidc.Payload]) (store.Attributes, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+
+			f.authenticateReqs = append(f.authenticateReqs, r.Context().Err())
 
 			if f.authenticateErr != nil {
 				return nil, f.authenticateErr
@@ -251,6 +255,15 @@ func (f *fixture) mintCount() int {
 	defer f.mu.Unlock()
 
 	return f.mints
+}
+
+// authenticateRequestErrs returns r.Context().Err() as each
+// Hooks.Authenticate call saw it.
+func (f *fixture) authenticateRequestErrs() []error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.authenticateReqs)
 }
 
 func (f *fixture) authenticatedSubjects() []sso.Subject[oidc.Payload] {

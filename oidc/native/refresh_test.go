@@ -127,6 +127,37 @@ func TestToken_RefreshConcurrent(t *testing.T) {
 	assert.NotEqual(t, before, idpTokenOf(t, f, rt))
 }
 
+// Without a grace window rotation is strict: a concurrent duplicate is
+// reuse and ends the session, the first response's token included.
+func TestToken_RefreshConcurrentWithoutGrace(t *testing.T) {
+	t.Parallel()
+
+	// a real clock: the fixture's stands still, which would keep a
+	// zero-width window open at the rotation's own instant
+	f := newFixture(t, WithRotationGrace(0), WithClock(time.Now))
+	rt := f.fullLogin(t)
+	f.idp.SetRefreshDelay(200 * time.Millisecond)
+
+	var (
+		wg      sync.WaitGroup
+		results [2]tokenResult
+	)
+
+	for i := range results {
+		wg.Go(func() { results[i] = f.refresh(t, rt) })
+	}
+
+	wg.Wait()
+
+	statuses := []int{results[0].status, results[1].status}
+	slices.Sort(statuses)
+	assert.Equal(t, []int{http.StatusOK, http.StatusBadRequest}, statuses, "%v", results)
+	assert.Equal(t, 1, f.idp.RefreshCalls())
+
+	_, err := sessionOf(t, f, rt)
+	require.ErrorIs(t, err, repository.ErrNotFound, "session ended")
+}
+
 func TestToken_RefreshRejectedByIdP(t *testing.T) {
 	t.Parallel()
 
@@ -195,10 +226,10 @@ func TestToken_RefreshSubjectChanged(t *testing.T) {
 	rt := f.fullLogin(t)
 	f.idp.SetRefreshBehaviour(fakeidp.RefreshOtherSubject)
 
-	assertOAuthError(t, f.refresh(t, rt), http.StatusServiceUnavailable, errTemporarilyUnavailable)
+	assertOAuthError(t, f.refresh(t, rt), http.StatusBadRequest, errInvalidGrant)
 
 	_, err := sessionOf(t, f, rt)
-	require.NoError(t, err, "session kept")
+	require.ErrorIs(t, err, repository.ErrNotFound, "session ended")
 }
 
 func TestToken_RefreshExpiredSession(t *testing.T) {
@@ -438,6 +469,11 @@ func TestToken_RefreshClientGoneKeepsToken(t *testing.T) {
 		cur, err := f.sessions.Get(t.Context(), s.ID)
 		return err == nil && slices.Equal(cur.RefreshHashes, s.RefreshHashes) && cur.RefreshLease == "" && idpTokenOf(t, f, a) != before
 	}, 3*time.Second, 20*time.Millisecond)
+
+	// the hook ran after the hang-up, yet its request was not cancelled
+	for i, err := range f.authenticateRequestErrs() {
+		require.NoError(t, err, "Authenticate call %d", i)
+	}
 
 	f.idp.SetRefreshDelay(0)
 	f.clock.Advance(5 * time.Minute)

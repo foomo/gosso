@@ -112,6 +112,27 @@ func TestRevoke(t *testing.T) {
 		})
 	}
 
+	for name, broken := range map[string]brokenSessions{
+		"get fails":    {failGet: true},
+		"delete fails": {failDelete: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixtureWithSessions(t, func(s repository.Session) repository.Session {
+				broken.Session = s
+				return broken
+			})
+			rt, id := issue(t, f)
+
+			// RFC 7009 §2.2.1: not revoked, so the app must not drop its token
+			assertOAuthError(t, revoke(t, f, url.Values{"token": {rt}, "client_id": {clientIOS}}), http.StatusServiceUnavailable, errTemporarilyUnavailable)
+
+			_, err := f.sessions.Get(t.Context(), id)
+			require.NoError(t, err, "session kept")
+		})
+	}
+
 	t.Run("missing token", func(t *testing.T) {
 		t.Parallel()
 

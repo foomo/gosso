@@ -49,3 +49,26 @@ func (s *leaseThief) Rotate(ctx context.Context, sess store.Session) error {
 
 	return s.Session.Rotate(ctx, sess)
 }
+
+// brokenSessions fails every Get and/or Delete.
+type brokenSessions struct {
+	repository.Session
+
+	failGet, failDelete bool
+}
+
+func (s brokenSessions) Get(ctx context.Context, id string) (store.Session, error) {
+	if s.failGet {
+		return store.Session{}, errStore
+	}
+
+	return s.Session.Get(ctx, id)
+}
+
+func (s brokenSessions) Delete(ctx context.Context, id string) error {
+	if s.failDelete {
+		return errStore
+	}
+
+	return s.Session.Delete(ctx, id)
+}

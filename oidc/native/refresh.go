@@ -259,12 +259,21 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s store.Session) bool {
 	}
 
 	sub, err := g.rp.Refresh(ctx, idpToken, s.Subject.ExternalID)
-	if errors.Is(err, oidc.ErrRefreshRejected) {
+
+	switch {
+	case errors.Is(err, oidc.ErrRefreshRejected):
 		g.deleteSession(ctx, s.ID)
 		g.fail(ctx, http.StatusBadRequest, errInvalidGrant, "idp-rejected", "refresh rejected by identity provider", err)
 
 		return true
-	} else if err != nil {
+	case errors.Is(err, oidc.ErrRefreshSubjectMismatch):
+		// the IdP token now speaks for another identity: no retry can
+		// recover the session, and its token must not be kept
+		g.deleteSession(ctx, s.ID)
+		g.fail(ctx, http.StatusBadRequest, errInvalidGrant, "idp-subject-mismatch", "identity provider returned another subject", err)
+
+		return true
+	case err != nil:
 		// the grant may have succeeded before a later step failed
 		if rfe, ok := errors.AsType[*oidc.RefreshFailedError](err); ok {
 			if sealed, serr := b.sealer.seal(rfe.RefreshToken, sealAAD(s.Subject.ExternalID)); serr == nil {
@@ -290,7 +299,9 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s store.Session) bool {
 		return true
 	}
 
-	attrs, err := b.hooks.Authenticate(ctx, g.r, sub)
+	// the request carries the detached ctx too, so a hook using
+	// r.Context() is not cut off when the app hangs up
+	attrs, err := b.hooks.Authenticate(ctx, g.r.WithContext(ctx), sub)
 	if err != nil {
 		release(&sealed)
 		g.fail(ctx, http.StatusServiceUnavailable, errTemporarilyUnavailable, "authenticate", "", err)

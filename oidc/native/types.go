@@ -33,7 +33,8 @@ type Hooks struct {
 	// Authenticate runs after a native login and after each successful
 	// refresh. It returns attributes stored on the session. An error fails
 	// the login (redirect with error=server_error) or the refresh (503,
-	// session kept).
+	// session kept). On refresh, ctx and r.Context() are detached from the
+	// app's request, so they outlive a hang-up; honour their deadline.
 	Authenticate func(ctx context.Context, r *http.Request, sub sso.Subject[oidc.Payload]) (store.Attributes, error)
 	// Mint issues the consumer's access token for a session. It decides
 	// the token format.

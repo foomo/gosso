@@ -162,8 +162,10 @@ Treat the refresh token as opaque. Every refresh returns a new one.
 `token=<refresh token>&client_id=…`. Ends the session (RFC 7009). The
 client must identify itself: a missing or unknown `client_id` is
 `400 invalid_client`, a missing `token` is `400 invalid_request`. Otherwise
-always `200 {}`, including for unknown or malformed tokens and tokens of
-another client.
+`200 {}`, including for unknown or malformed tokens and tokens of another
+client. Only a repository failure answers `503 temporarily_unavailable`
+(RFC 7009 §2.2.1): the session may still exist, so keep the token and
+retry.
 
 ### Errors
 
@@ -183,10 +185,11 @@ Token and revoke responses are JSON with `Cache-Control: no-store` and
 | refresh token unknown, malformed, other client, session expired or revoked | `400 invalid_grant`, session kept unless expired |
 | refresh token reused: a rotated one presented outside the grace window | `400 invalid_grant`, session deleted |
 | IdP rejects the refresh (`invalid_grant`) | `400 invalid_grant`, session deleted |
-| IdP unreachable or 5xx on refresh, subject changed | `503 temporarily_unavailable`, session kept |
+| IdP returns another subject on refresh | `400 invalid_grant`, session deleted |
+| IdP unreachable or 5xx on refresh | `503 temporarily_unavailable`, session kept |
 | `Authenticate` or `Mint` fails on refresh | `503 temporarily_unavailable`, session kept |
 | the request waited 60 s in total for other refreshes of the session | `503 temporarily_unavailable` |
-| repository failure | `500 server_error` |
+| repository failure | `500 server_error` (revoke: `503 temporarily_unavailable`) |
 
 ## Lifetimes and options
 
@@ -194,7 +197,7 @@ Token and revoke responses are JSON with `Cache-Control: no-store` and
 | --- | --- | --- |
 | `WithCodeTTL(d)` | `60s` | how long a code can be redeemed |
 | `WithSessionTTL(d)` | `90 days` | absolute session lifetime, counted from login |
-| `WithRotationGrace(d)` | `10s` | how long the previous refresh tokens keep working after a rotation is stored |
+| `WithRotationGrace(d)` | `10s` | how long the previous refresh tokens keep working after a rotation is stored; `0` makes rotation strict (see [Known limitations](#known-limitations)) |
 | `WithDeprecatedEncryptionKeys(keys...)` | | previous 32-byte keys that still decrypt stored IdP refresh tokens |
 | `WithErrorLogger(fn)` | silent | routes runtime errors to your logger |
 | `WithClock(fn)` | `time.Now` | for tests |
@@ -218,9 +221,9 @@ type Code interface {
 
 type Session interface {
     Create(ctx, s store.Session) error
-    Get(ctx, id string) (store.Session, error)              // ErrNotFound
-    Rotate(ctx, s store.Session, expectedHash string) error // CAS on RefreshHash; ErrConflict
-    Delete(ctx, id string) error                            // idempotent
+    Get(ctx, id string) (store.Session, error) // ErrNotFound
+    Rotate(ctx, s store.Session) error         // CAS on Version, stores Version+1; ErrConflict
+    Delete(ctx, id string) error               // idempotent
 }
 ```
 
@@ -265,10 +268,16 @@ has to implement the two interfaces.
   None of them is secret.
 - **No CSRF surface**: token and revoke are not cookie-authenticated and
   need no CORS.
-- **Custom schemes** can be claimed by another app on the device. With
-  PKCE that app gets a code it cannot redeem; RFC 8252 accepts this
-  residual risk. Claimed HTTPS redirects (Universal Links / App Links)
-  are the hardening option.
+- **Custom schemes** can be claimed by another app on the device. If that
+  app intercepts a login your app started, PKCE stops it: it gets a code
+  it cannot redeem. It can also start a login of its own, with its own
+  `code_challenge`, against your registered redirect URI. The broker
+  cannot tell the two apps apart (RFC 8252 §8.6), and while the user
+  still has an SSO session at the IdP that login completes without any
+  interaction, so the other app gets a session. The broker does not ask
+  the IdP for interaction (`prompt`) yet. Claimed HTTPS redirects
+  (Universal Links / App Links) prove the app's identity and are the fix;
+  register custom schemes only where you accept this risk.
 
 ## Known limitations
 
@@ -280,7 +289,9 @@ has to implement the two interfaces.
   window is not extended by the duplicates. Once any of those tokens is
   refreshed, the others are rotated tokens too; using one after the next
   grace window ends the session. Serialising refreshes in the app avoids
-  the question entirely.
+  the question entirely. With `WithRotationGrace(0)` there is no window:
+  rotation is strict, and a duplicate, even one sent concurrently with
+  the first refresh, ends the session.
 - **Broker clocks**: a refresh holds its session for at most 60 s (30 s
   of work plus a 30 s margin), checked against the clock of whichever
   broker instance reads it. If instances sharing a database disagree by
@@ -297,13 +308,11 @@ has to implement the two interfaces.
   whatever your IdP needs to issue one). A login without one fails right
   away with `error=server_error` instead of producing a session that dies
   at its first refresh.
-- **IdP-side subject changes**: a refresh whose subject differs from the
-  session's answers `503` and keeps the session (with the IdP's newest
-  refresh token), so every retry answers `503` until the app logs in
-  again.
 
 Whatever fails after the IdP issued a new refresh token (UserInfo,
 `Authenticate`, `Mint`, a repository, the app hanging up), the broker keeps
 that token and leaves the app's refresh token valid, so the app's retry
-with the same refresh token works. Access tokens are minted once, after
+with the same refresh token works. The exception is a refresh whose
+subject differs from the session's: no retry can fix that, so the session
+is deleted and the app has to log in again. Access tokens are minted once, after
 the rotation is stored; if `Mint` fails, the rotation is taken back.

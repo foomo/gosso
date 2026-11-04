@@ -96,8 +96,11 @@ func TestRefresh(t *testing.T) {
 			behaviour: fakeidp.RefreshOtherSubject,
 			check: func(t *testing.T, _ string, r refreshResult) {
 				t.Helper()
-				require.Error(t, r.err)
-				assert.NotErrorIs(t, r.err, ErrRefreshRejected)
+				require.ErrorIs(t, r.err, ErrRefreshSubjectMismatch)
+				require.NotErrorIs(t, r.err, ErrRefreshRejected)
+
+				var rfe *RefreshFailedError
+				require.ErrorAs(t, r.err, &rfe, "the grant succeeded")
 			},
 		},
 	}
