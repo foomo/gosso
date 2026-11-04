@@ -65,7 +65,9 @@ mux.Handle("/oidc/logout", h.Logout)
 ## Post-login redirect (`WithOnRedirect`)
 
 By default the callback redirects the browser to the `target` carried in the
-transit cookie (the `?target=` from `/login`, or `/` when absent). Supply
+transit cookie (the `?target=` from `/login`, or `/` when absent). The target
+keeps its query, so a login entry can pass state through it (for example
+`?target=/checkout?origin=cart`); the fragment is dropped. Supply
 `oidc.WithOnRedirect` to compute the final destination yourself:
 
 ```go
@@ -79,10 +81,17 @@ oidc.WithOnRedirect(func(
     // Runs after OnAuthenticated succeeds. It receives the authenticated
     // subject and the resolved (safe) target. Return a non-empty string to
     // override the redirect destination; return "" to keep `target`.
-    if strings.HasPrefix(target, "/checkout") {
+    u, err := url.Parse(target)
+    if err != nil {
+        return "", err
+    }
+    if strings.HasPrefix(u.Path, "/checkout") {
         return target, nil // leave checkout logins untouched
     }
-    return target + "?notice=cartMerged", nil
+    q := u.Query()
+    q.Set("notice", "cartMerged")
+    u.RawQuery = q.Encode()
+    return u.String(), nil
 }),
 ```
 
