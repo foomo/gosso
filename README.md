@@ -35,6 +35,11 @@ http.Handle("/oidc/logout", h.Logout)
 SAML has the exact same shape. Both protocols produce an
 `sso.Subject[T]` so your session-construction code can be shared.
 
+Native apps (iOS, Android, CLI) can log in through the same OIDC RP with
+the opt-in [`oidc/native` broker](https://foomo.github.io/gosso/guide/native):
+authorization code + PKCE for public clients, rotating refresh tokens
+backed by the IdP's own refresh token.
+
 ## Full docs
 
 <https://foomo.github.io/gosso/>
@@ -44,6 +49,7 @@ SAML has the exact same shape. Both protocols produce an
 ```sh
 make sandbox.up   # Keycloak on :8081 with realm preloaded
 make sandbox.run  # demo app on :8080, both protocols mounted
+make sandbox.app  # native-app CLI client against the demo app
 
 # log in as alice / password (admins) or bob / password (users)
 ```

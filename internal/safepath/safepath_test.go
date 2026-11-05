@@ -1,6 +1,8 @@
 package safepath_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/foomo/gosso/internal/safepath"
@@ -44,6 +46,41 @@ func TestTarget(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.want, safepath.Target(tc.in))
+		})
+	}
+}
+
+func TestTarget_Length(t *testing.T) {
+	t.Parallel()
+
+	// encodedLen is the target's length inside a JSON string, the form
+	// both adapters keep it in, in a size-limited cookie
+	encodedLen := func(s string) int {
+		b, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return len(b) - 2
+	}
+
+	atLimit := "/page?q=" + strings.Repeat("a", safepath.MaxLength-len("/page?q="))
+
+	cases := map[string]struct{ in, want string }{
+		"at limit kept":              {atLimit, atLimit},
+		"long query dropped":         {atLimit + "a", "/page"},
+		"long path falls back":       {"/" + strings.Repeat("a", safepath.MaxLength), "/"},
+		"escaped length counts":      {"/page?" + strings.Repeat("&", 200), "/page"},
+		"short ampersand query kept": {"/page?a=1&b=2", "/page?a=1&b=2"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := safepath.Target(tc.in)
+			assert.Equal(t, tc.want, got)
+			assert.LessOrEqual(t, encodedLen(got), safepath.MaxLength)
 		})
 	}
 }

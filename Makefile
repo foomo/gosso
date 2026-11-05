@@ -147,24 +147,106 @@ godocs:
 
 ### Sandbox
 
+SANDBOX_COMPOSE=docker compose -f examples/sandbox/docker-compose.yaml
+SANDBOX_APP=cd examples && go run ./nativeapp
+SANDBOX_KCADM=$(SANDBOX_COMPOSE) exec -T keycloak /opt/keycloak/bin/kcadm.sh
+SANDBOX_KCADM_CFG=--config /tmp/kcadm.config
+SANDBOX_USER?=alice
+
 .PHONY: sandbox.up
-## Start the keycloak sandbox
+## Start the sandbox (keycloak + mongo) and wait until healthy
 sandbox.up:
-	@echo "〉starting keycloak"
-	@docker compose -f examples/sandbox/docker-compose.yaml up -d
+	@echo "〉starting keycloak and mongo"
+	@$(SANDBOX_COMPOSE) up -d --wait
 	@echo "〉keycloak admin: http://localhost:8081  (admin / admin)"
 
 .PHONY: sandbox.down
-## Stop the keycloak sandbox and remove volumes
+## Stop the sandbox (keycloak + mongo) and remove volumes
 sandbox.down:
-	@echo "〉stopping keycloak"
-	@docker compose -f examples/sandbox/docker-compose.yaml down -v
+	@echo "〉stopping keycloak and mongo"
+	@$(SANDBOX_COMPOSE) down -v
+
+.PHONY: sandbox.status
+## Show the sandbox containers and their health
+sandbox.status:
+	@$(SANDBOX_COMPOSE) ps
+
+.PHONY: sandbox.logs
+## Follow the sandbox container logs (ARGS=keycloak|mongo)
+sandbox.logs:
+	@$(SANDBOX_COMPOSE) logs -f $(ARGS)
 
 .PHONY: sandbox.run
 ## Run the sandbox demo app against keycloak
 sandbox.run:
 	@echo "〉starting sandbox demo at http://localhost:8080"
 	@cd examples && go run ./sandbox
+
+.PHONY: sandbox.app
+## Native client: login, whoami, refresh, revoke (ARGS=-scenario=...)
+sandbox.app:
+	@$(SANDBOX_APP) $(ARGS)
+
+.PHONY: sandbox.app.check
+## Native client: protocol checks that need no login
+sandbox.app.check:
+	@$(SANDBOX_APP) -scenario=check
+
+.PHONY: sandbox.app.reuse
+## Native client: an old refresh token replayed after grace revokes the session
+sandbox.app.reuse:
+	@$(SANDBOX_APP) -scenario=reuse
+
+.PHONY: sandbox.app.concurrent
+## Native client: two concurrent refreshes both succeed
+sandbox.app.concurrent:
+	@$(SANDBOX_APP) -scenario=concurrent
+
+.PHONY: sandbox.app.outage
+## Native client: IdP down answers 503 and keeps the session (interactive)
+sandbox.app.outage:
+	@$(SANDBOX_APP) -scenario=outage
+
+.PHONY: sandbox.app.signout
+## Native client: an IdP-side sign-out ends the session (interactive)
+sandbox.app.signout:
+	@$(SANDBOX_APP) -scenario=signout
+
+.PHONY: sandbox.app.restart
+## Native client: a session survives a restart of the demo app (interactive)
+sandbox.app.restart:
+	@$(SANDBOX_APP) -scenario=restart
+
+.PHONY: sandbox.idp.stop
+## Stop keycloak only, to simulate an IdP outage
+sandbox.idp.stop:
+	@echo "〉stopping keycloak"
+	@$(SANDBOX_COMPOSE) stop keycloak
+
+.PHONY: sandbox.idp.start
+## Start keycloak again and wait until healthy
+sandbox.idp.start:
+	@echo "〉starting keycloak"
+	@$(SANDBOX_COMPOSE) up -d --wait keycloak
+
+.PHONY: sandbox.idp.signout
+## End a user's offline session at keycloak (SANDBOX_USER=alice)
+sandbox.idp.signout:
+	@echo "〉revoking $(SANDBOX_USER)'s offline tokens for gosso-oidc"
+	@$(SANDBOX_KCADM) config credentials --server http://localhost:8080 --realm master --user admin --password admin $(SANDBOX_KCADM_CFG)
+	@id=$$($(SANDBOX_KCADM) get users -r gosso-sandbox -q username=$(SANDBOX_USER) -q exact=true --fields id --format csv --noquotes $(SANDBOX_KCADM_CFG)) && \
+		test -n "$$id" && $(SANDBOX_KCADM) delete users/$$id/consents/gosso-oidc -r gosso-sandbox $(SANDBOX_KCADM_CFG)
+
+.PHONY: sandbox.mongo
+## Show the native broker's codes, sessions and indexes in mongo
+sandbox.mongo:
+	@$(SANDBOX_COMPOSE) exec -T mongo mongosh gosso_sandbox --quiet --eval ' \
+		print("codes:    " + db.gosso_native_codes.countDocuments()); \
+		print("sessions: " + db.gosso_native_sessions.countDocuments()); \
+		printjson(db.gosso_native_sessions.find({}, {_id: 0, id: 1, clientID: 1, "subject.externalID": 1, attributes: 1, rotatedAt: 1, expiresAt: 1, "idpRefreshToken.keyID": 1}).toArray()); \
+		print("indexes:"); \
+		printjson(db.gosso_native_codes.getIndexes().map(i => i.key)); \
+		printjson(db.gosso_native_sessions.getIndexes().map(i => i.key));'
 
 .PHONY: sandbox.certs
 ## Regenerate the sandbox SP cert pair (dev only)

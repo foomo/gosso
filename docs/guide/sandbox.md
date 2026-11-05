@@ -52,6 +52,30 @@ stored subject. Note that it keeps only a normalised projection of
 `Subject` (plus `RawIDToken` and `SessionIndex` for logout), because
 the raw SAML assertion and OIDC ID token are not JSON-friendly.
 
+### Native-app broker
+
+The OIDC RP also carries the [native broker](./native) for a public
+client `sandbox-cli` with the loopback redirect
+`http://127.0.0.1:8090/callback`. It mounts `/oidc/app/authorize`,
+`/oidc/app/token` and `/oidc/app/revoke`, keeps codes and sessions in
+MongoDB, and mints opaque 2-minute access tokens that `/app/whoami`
+accepts as `Authorization: Bearer`. `examples/nativeapp` is the CLI
+client:
+
+```sh
+make sandbox.app.check        # protocol checks, no login
+make sandbox.app              # login, whoami, refresh, whoami, revoke
+make sandbox.app.reuse        # replay an old refresh token: session revoked
+make sandbox.app.concurrent   # two concurrent refreshes both succeed
+make sandbox.app.outage       # with sandbox.idp.stop / sandbox.idp.start: 503, session kept
+make sandbox.app.signout      # with sandbox.idp.signout: IdP ends the session
+make sandbox.app.restart      # a session survives a restart of the demo app
+make sandbox.mongo            # the broker's stored codes, sessions and indexes
+```
+
+Each scenario prints `PASS` or `FAIL`. See `examples/sandbox/README.md`
+for the full testing playbook.
+
 ### Certificates
 
 A dev-only SP cert lives at `examples/sandbox/certs/sp.{crt,key}`.

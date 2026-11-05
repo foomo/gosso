@@ -24,6 +24,8 @@ var (
 	tokenExchangeDuration metric.Int64Histogram
 	userinfoDuration      metric.Int64Histogram
 	logoutStarted         metric.Int64Counter
+	refreshCompleted      metric.Int64Counter
+	refreshDuration       metric.Int64Histogram
 )
 
 func init() {
@@ -59,6 +61,15 @@ func init() {
 	logoutStarted, _ = m.Int64Counter(
 		"gosso.oidc.logout.started",
 		metric.WithDescription("Number of OIDC logout flows initiated"),
+	)
+	refreshCompleted, _ = m.Int64Counter(
+		"gosso.oidc.refresh.completed",
+		metric.WithDescription("Number of IdP refresh-token grants completed, tagged by outcome and (on failure) stage"),
+	)
+	refreshDuration, _ = m.Int64Histogram(
+		"gosso.oidc.refresh.duration",
+		metric.WithUnit("ms"),
+		metric.WithDescription("Duration of an IdP refresh-token grant including verification"),
 	)
 }
 

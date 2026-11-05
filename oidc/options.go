@@ -197,6 +197,39 @@ func WithOnRedirect(fn OnRedirect) Option {
 	}
 }
 
+// StageIDPError is the stage OnLoginError receives when the IdP redirected
+// back with ?error= (for example access_denied after a user cancelled).
+const StageIDPError = "idp-error"
+
+// OnLoginError runs when the callback fails after the transit cookie and
+// state were verified, so lc is the login context of this very login. stage
+// names the failing step (StageIDPError, "token-exchange", "on-redirect",
+// ...); the IdP's own error code, if any, is in r.URL.Query().Get("error").
+// Returning a non-empty URL redirects there with 302. The URL is not
+// sanitised: the consumer owns it. Returning "" keeps the default HTTP
+// error response.
+//
+// Failures before the state check (a missing, tampered or expired transit
+// cookie, a state mismatch) never reach OnLoginError: the context is not
+// trustworthy there.
+type OnLoginError func(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	lc LoginContext,
+	stage string,
+	err error,
+) (redirect string)
+
+// WithOnLoginError registers a callback that may redirect on callback
+// failures after the state check. See OnLoginError.
+func WithOnLoginError(fn OnLoginError) Option {
+	return func(rp *RP) error {
+		rp.onLoginError = fn
+		return nil
+	}
+}
+
 // WithPostLogoutRedirectURL sets the URL the IdP will redirect back to
 // after a successful RP-initiated logout.
 func WithPostLogoutRedirectURL(u string) Option {

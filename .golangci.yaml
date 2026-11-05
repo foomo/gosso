@@ -22,6 +22,7 @@ linters:
     - dupword
     - err113
     - exhaustruct
+    - exhaustruct_v5
     - funlen
     - ginkgolinter
     - gochecknoglobals
@@ -83,6 +84,7 @@ linters:
       - path: _test\.go
         linters:
           - forbidigo
+          - goconst
           - unused
           - gosec
     paths:

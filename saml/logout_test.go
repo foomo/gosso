@@ -39,12 +39,10 @@ func newTestServiceProvider(t *testing.T) saml.ServiceProvider {
 		IDPMetadata: &saml.EntityDescriptor{
 			EntityID: "https://idp.example.com",
 			IDPSSODescriptors: []saml.IDPSSODescriptor{{
-				SSODescriptor: saml.SSODescriptor{
-					SingleLogoutServices: []saml.Endpoint{{
-						Binding:  saml.HTTPRedirectBinding,
-						Location: testIDPSLOURL,
-					}},
-				},
+				SingleLogoutServices: []saml.Endpoint{{
+					Binding:  saml.HTTPRedirectBinding,
+					Location: testIDPSLOURL,
+				}},
 			}},
 		},
 	}
