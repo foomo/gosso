@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sso "github.com/foomo/gosso"
+	"github.com/foomo/gosso/internal/tokens"
 	"github.com/foomo/gosso/oidc"
 	"github.com/foomo/gosso/oidc/native/repository"
 	"github.com/foomo/gosso/oidc/native/repository/store"
@@ -151,7 +152,7 @@ func TestAuthorize_Validation(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	challenge := hashToken(strings.Repeat("v", 43))
+	challenge := tokens.S256(strings.Repeat("v", 43))
 
 	cases := map[string]struct {
 		mutate    func(q url.Values)
@@ -241,7 +242,7 @@ func TestAuthorize_LoginInitFails(t *testing.T) {
 	b.OnLoginError(nil)
 	require.NoError(t, b.Attach(f.rp))
 
-	q := authorizeQuery("app-state", hashToken(strings.Repeat("v", 43)))
+	q := authorizeQuery("app-state", tokens.S256(strings.Repeat("v", 43)))
 	q.Set("redirect_uri", longRedirect)
 
 	rec := httptest.NewRecorder()
@@ -271,4 +272,53 @@ func TestAuthorize_BeforeAttach(t *testing.T) {
 		handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil))
 		assert.Equal(t, http.StatusInternalServerError, rec.Code, name)
 	}
+}
+
+func TestAuthorize_RequestsOfflineAccessForNativeLoginsOnly(t *testing.T) {
+	t.Parallel()
+
+	// idpScope returns the scope of the authorization request path starts
+	idpScope := func(t *testing.T, f *fixture, path string) string {
+		t.Helper()
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, f.server.URL+path, nil)
+		require.NoError(t, err)
+
+		client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, http.StatusFound, resp.StatusCode)
+
+		loc, err := url.Parse(resp.Header.Get("Location"))
+		require.NoError(t, err)
+		require.Equal(t, hostOf(f.idp.URL), loc.Host)
+
+		return loc.Query().Get("scope")
+	}
+
+	nativePath := "/app/authorize?" + authorizeQuery("s", strings.Repeat("c", 43)).Encode()
+
+	t.Run("default", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+		assert.Equal(t, "openid profile email offline_access", idpScope(t, f, nativePath))
+		assert.Equal(t, "openid profile email", idpScope(t, f, "/login"), "web logins open no offline session")
+	})
+
+	t.Run("replaced", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t, WithLoginScopes("custom_offline"))
+		assert.Equal(t, "openid profile email custom_offline", idpScope(t, f, nativePath))
+	})
+
+	t.Run("none", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t, WithLoginScopes())
+		assert.Equal(t, "openid profile email", idpScope(t, f, nativePath))
+	})
 }

@@ -344,7 +344,6 @@ func newOIDCRP(store *sessionStore, accessTokens *accessTokenStore, persistor *k
 			appURL+"/oidc/callback",
 			[]byte("sandbox-not-for-production-use-only"),
 			broker.OnAuthenticated(onAuth),
-			oidc.WithExtraScopes("offline_access"),
 			oidc.WithOnRedirect(broker.OnRedirect(nil)),
 			oidc.WithOnLoginError(broker.OnLoginError(nil)),
 			oidc.WithOnLogout(func(_ context.Context, w http.ResponseWriter, r *http.Request) error {

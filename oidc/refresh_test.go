@@ -4,10 +4,11 @@ import (
 	"net/http"
 	"testing"
 
-	sso "github.com/foomo/gosso"
-	"github.com/foomo/gosso/internal/fakeidp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	sso "github.com/foomo/gosso"
+	"github.com/foomo/gosso/internal/fakeidp"
 )
 
 // loginRefreshToken runs a web login against the fixture's fake IdP and
@@ -147,6 +148,24 @@ func TestRefresh_FailureAfterGrantKeepsNewToken(t *testing.T) {
 
 	_, err = f.rp.Refresh(t.Context(), rfe.RefreshToken, "alice")
 	require.NoError(t, err)
+}
+
+func TestRefresh_MissingExternalIDIsSubjectMismatch(t *testing.T) {
+	t.Parallel()
+
+	f := newRPFixture(t, nil)
+	input := loginRefreshToken(t, f)
+
+	// the external-id claim is absent from the refreshed ID token: every
+	// retry would fail the same way, so it must not look transient
+	f.rp.claimMap.ExternalID = "employee_id"
+
+	_, err := f.rp.Refresh(t.Context(), input, "alice")
+	require.ErrorIs(t, err, ErrRefreshSubjectMismatch)
+
+	var rfe *RefreshFailedError
+	require.ErrorAs(t, err, &rfe, "the grant succeeded")
+	assert.NotEmpty(t, rfe.RefreshToken)
 }
 
 func TestRefresh_GrantFailureIsNotRefreshFailedError(t *testing.T) {

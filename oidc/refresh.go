@@ -25,9 +25,10 @@ var ErrRefreshRejected = errors.New("oidc: refresh token rejected")
 
 // ErrRefreshSubjectMismatch means the IdP granted the refresh but the
 // identity it returned is not the expected one: the refreshed subject
-// differs from expectedExternalID, or UserInfo's sub from the ID token's.
-// Retrying cannot fix it, so treat the session as over. It always comes
-// wrapped in a *RefreshFailedError.
+// differs from expectedExternalID or lacks the external-id claim, or
+// UserInfo's sub differs from the ID token's. Retrying cannot fix it, so
+// treat the session as over. It always comes wrapped in a
+// *RefreshFailedError.
 var ErrRefreshSubjectMismatch = errors.New("oidc: refreshed subject mismatch")
 
 // RefreshFailedError is returned by Refresh when the IdP granted the
@@ -175,7 +176,10 @@ func (rp *RP) subjectFromRefresh(ctx context.Context, tok *oauth2.Token, next, e
 		RefreshToken: next,
 		Expiry:       tok.Expiry,
 	}, userInfo, rp.claimMap)
-	if err != nil {
+	if errors.Is(err, errMissingExternalID) {
+		// no identity to compare: as permanent as another one
+		return sso.Subject[Payload]{}, "build-subject", fmt.Errorf("%w: %w", ErrRefreshSubjectMismatch, err)
+	} else if err != nil {
 		return sso.Subject[Payload]{}, "build-subject", err
 	}
 

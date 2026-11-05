@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/foomo/gosso/internal/telemetry"
+	"github.com/foomo/gosso/internal/tokens"
 	"github.com/foomo/gosso/oidc"
 	"github.com/foomo/gosso/oidc/native/repository"
 	"github.com/foomo/gosso/oidc/native/repository/store"
@@ -133,7 +134,7 @@ func (b *Broker) authorizationCodeGrant(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// From here on the code is consumed, whatever the outcome.
-	c, err := b.codes.Take(ctx, hashToken(code))
+	c, err := b.codes.Take(ctx, tokens.S256(code))
 	if errors.Is(err, repository.ErrNotFound) {
 		fail(http.StatusBadRequest, errInvalidGrant, "code-unknown", "code invalid", nil)
 		return
@@ -159,22 +160,13 @@ func (b *Broker) authorizationCodeGrant(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	id, err := randomToken(16)
-	if err != nil {
-		fail(http.StatusInternalServerError, errServerError, "random", "", err)
-		return
-	}
-
-	secret, err := randomToken(32)
-	if err != nil {
-		fail(http.StatusInternalServerError, errServerError, "random", "", err)
-		return
-	}
+	id := tokens.Random(16)
+	secret := tokens.Random(32)
 
 	s := store.Session{
 		ID:              id,
 		ClientID:        client.ID,
-		RefreshHashes:   []string{hashToken(secret)},
+		RefreshHashes:   []string{tokens.S256(secret)},
 		Subject:         c.Subject,
 		Attributes:      c.Attributes,
 		IDPRefreshToken: c.IDPRefreshToken,

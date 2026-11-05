@@ -27,7 +27,6 @@ github.com/foomo/gosso/saml     # SAML SP on crewjam/saml
 github.com/foomo/gosso/oidc     # OIDC RP: auth-code + PKCE, coreos/go-oidc/v3 + x/oauth2
   oidc.go, options.go, payload.go, claimmap.go
   transit.go + _test.go         # HMAC-signed transit cookie (state/nonce/PKCE verifier/login context)
-  pkce.go + _test.go            # RFC 7636 helpers
   extract.go + _test.go, token.go
   handlers.go, login.go, callback.go, logout.go
   logincontext.go + _test.go    # LoginContext, RP.Login, LoginOption; OnLoginError tests
@@ -48,6 +47,10 @@ internal/mongotest              # one mongo:7 testcontainer per test binary, fre
 
 internal/fakeidp                # httptest OIDC IdP (discovery, JWKS, authorize, token, userinfo)
 
+internal/tokens                 # Random(n) + S256: state/nonce/PKCE, native codes/secrets/IDs
+
+internal/safepath               # ?target= open-redirect guard + 1024-byte length cap
+
 examples/                       # separate module (replace ../)
   sandbox/                      # runnable Keycloak + demo app (+ native broker, /app/whoami)
     docker-compose.yaml, realm-export.json, main.go, certs/sp.{crt,key}
@@ -63,7 +66,7 @@ Violating these requires explicit discussion — they're why the library exists:
 3. **Shared `Subject[T]` across protocols.** SAML and OIDC both produce `sso.Subject[T]` with the same common fields (`ExternalID`, `Email`, `Firstname`, `Lastname`, `Groups`, `NameID`) and differ only in `Raw T` (`saml.Payload` vs `oidc.Payload`). Don't diverge the shared fields.
 4. **Transit state ≠ session state.** The OIDC package uses a signed short-lived cookie `gosso_oidc_transit` to carry `state`/`nonce`/PKCE verifier between `/login` and `/callback`. Protocol plumbing, not a user session — carries no identity, deleted on first read.
 5. **Functional options via `github.com/foomo/go/options`.** `Option = options.OptionE[*SP]` / `[*RP]`; validation lives in each `With*`; `options.ApplyE` centralises error wrapping.
-6. **Open-redirect guard on `?target=`.** Both `/login` handlers accept a `target` query param; only relative URLs are honoured, others fall back to `/`. The target's query is kept verbatim and its fragment dropped (`internal/safepath`).
+6. **Open-redirect guard on `?target=`.** Both `/login` handlers accept a `target` query param; only relative URLs are honoured, others fall back to `/`. The target's query is kept verbatim and its fragment dropped; over 1024 bytes JSON-encoded the query is dropped too, so the target cannot overflow the transit / relay-state cookie (`internal/safepath`).
 7. **Redirect decision separate from auth (OIDC).** `oidc.WithOnRedirect(func(ctx, w, r, sub, target) (finalTarget, err))` runs after `OnAuthenticated` and computes the post-login destination. It exists because `OnAuthenticated` never sees `target` (so it can't branch on *where* login was initiated) yet the consumer often needs to — and because it owns the ResponseWriter, it can set extra cookies before the redirect. Return `""` to keep `target`; an error aborts the callback. The `?target=` guard still applies to `target`; the rewritten target is not sanitised — the consumer owns it (the native broker redirects to app schemes). `oidc.WithOnLoginError` is the error-path counterpart: it runs only for failures after the transit/state check and may return a (likewise unsanitised) redirect.
 8. **Login context is signed, not encrypted.** `oidc.LoginContext` rides in the transit cookie from `RP.Login` to the callback hooks (`LoginContextFromContext`). No secrets in it; keep it small (cookie size). It reaches hooks only after the state check.
 
@@ -107,8 +110,9 @@ make docs.build       # static build -> docs/.vitepress/dist
 
 - **Root `sso`**: external `sso_test` package. `GroupMapper` table tests.
 - **`saml/`**: internal `package saml` tests. `parseAssertion` tested with hand-constructed `*saml.Assertion`; `safeTarget` table test.
-- **`oidc/`**: internal `package oidc` tests. Transit codec (round-trip + tamper + expiry + key rotation + login context), PKCE helpers (RFC 7636 test vector), `stringSliceClaim`, `buildSubject` merge precedence; login context, `OnLoginError` and `RP.Refresh` end to end against `internal/fakeidp`.
+- **`oidc/`**: internal `package oidc` tests. Transit codec (round-trip + tamper + expiry + key rotation + login context), `stringSliceClaim`, `buildSubject` merge precedence; login context, `OnLoginError` and `RP.Refresh` end to end against `internal/fakeidp`.
 - **`internal/fakeidp`**: httptest OIDC IdP with steerable refresh behaviour (rotate / keep / no ID token / other subject / reject / 5xx, delay, call count). Tests need local port binding.
+- **`internal/tokens`**: RFC 7636 test vector, lengths. **`internal/safepath`**: open-redirect and length table tests.
 - **Docker is required**: `oidc/native` and `oidc/native/repository` tests run against `mongo:7` via `internal/mongotest` (testcontainers). There is no in-memory repository on purpose — no parallel implementation to maintain.
 - **`oidc/native`**: internal tests against fakeidp + a real RP + MongoDB repositories (`fixture_test.go`), settable clock; `sessionfaults_test.go` wraps `repository.Session` for failure injection.
 - **`oidc/native/repository`**: repository semantics (take-once, CAS rotate, idempotent delete, copies) and index checks.

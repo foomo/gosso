@@ -6,33 +6,16 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 
+	"github.com/foomo/gosso/internal/tokens"
 	"github.com/foomo/gosso/oidc/native/repository/store"
 )
 
 // encryptionKeyBytes is the AES-256 key length.
 const encryptionKeyBytes = 32
-
-// randomToken returns base64url(n random bytes) without padding.
-func randomToken(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("random token: %w", err)
-	}
-
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-// hashToken returns base64url(SHA-256(v)), the at-rest form of codes and
-// refresh secrets.
-func hashToken(v string) string {
-	sum := sha256.Sum256([]byte(v))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
 
 // verifyS256 reports whether challenge is base64url(SHA-256(verifier)).
 // A malformed verifier never matches.
@@ -41,7 +24,7 @@ func verifyS256(verifier, challenge string) bool {
 		return false
 	}
 
-	return subtle.ConstantTimeCompare([]byte(hashToken(verifier)), []byte(challenge)) == 1
+	return subtle.ConstantTimeCompare([]byte(tokens.S256(verifier)), []byte(challenge)) == 1
 }
 
 // validVerifier checks RFC 7636 §4.1: 43–128 characters of
@@ -82,6 +65,11 @@ func isAlnum(c byte) bool {
 func isUnreserved(c byte) bool {
 	return isAlnum(c) || c == '-' || c == '.' || c == '_' || c == '~'
 }
+
+// errUndecryptable means a sealed token names a known key but does not
+// open with it: corrupt, or sealed for another subject. Unlike an unknown
+// key ID, which configuring the key again repairs, no retry can fix it.
+var errUndecryptable = errors.New("undecryptable token")
 
 // sealer encrypts IdP refresh tokens with AES-256-GCM. It seals with the
 // primary key and opens with any known key, looked up by KeyID.
@@ -149,14 +137,14 @@ func (s *sealer) open(t store.EncryptedToken, aad string) (string, error) {
 	}
 
 	if len(t.Ciphertext) < aead.NonceSize() {
-		return "", errors.New("ciphertext too short")
+		return "", fmt.Errorf("%w: ciphertext too short", errUndecryptable)
 	}
 
 	nonce, ct := t.Ciphertext[:aead.NonceSize()], t.Ciphertext[aead.NonceSize():]
 
 	pt, err := aead.Open(nil, nonce, ct, []byte(aad))
 	if err != nil {
-		return "", fmt.Errorf("decrypt: %w", err)
+		return "", fmt.Errorf("%w: decrypt: %w", errUndecryptable, err)
 	}
 
 	return string(pt), nil

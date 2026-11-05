@@ -55,7 +55,6 @@ b, err := native.New(codes, sessions, native.Hooks{
 
 rp, err := oidc.New(ctx, issuer, clientID, clientSecret, callbackURL, transitKey,
 	b.OnAuthenticated(webOnAuth),
-	oidc.WithExtraScopes("offline_access"),
 	oidc.WithOnRedirect(b.OnRedirect(webOnRedirect)),
 	oidc.WithOnLoginError(b.OnLoginError(nil)),
 )

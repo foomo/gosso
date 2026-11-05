@@ -31,6 +31,7 @@ type Broker struct {
 	codeTTL        time.Duration
 	sessionTTL     time.Duration
 	rotationGrace  time.Duration
+	loginScopes    []string
 	errorLogger    sso.ErrorLogger
 	now            func() time.Time
 
@@ -75,6 +76,7 @@ func New(codes repository.Code, sessions repository.Session, hooks Hooks, client
 		codeTTL:       defaultCodeTTL,
 		sessionTTL:    defaultSessionTTL,
 		rotationGrace: defaultRotationGrace,
+		loginScopes:   defaultLoginScopes,
 		now:           time.Now,
 	}
 	if err := options.ApplyE(b, opts...); err != nil {

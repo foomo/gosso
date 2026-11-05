@@ -3,6 +3,7 @@ package native
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/foomo/go/options"
@@ -18,6 +19,10 @@ const (
 	defaultSessionTTL    = 90 * 24 * time.Hour
 	defaultRotationGrace = 10 * time.Second
 )
+
+// defaultLoginScopes are requested on native logins unless
+// WithLoginScopes replaces them.
+var defaultLoginScopes = []string{"offline_access"}
 
 // WithCodeTTL sets how long a one-time code can be redeemed. Default 60s.
 func WithCodeTTL(d time.Duration) Option {
@@ -83,6 +88,18 @@ func WithDeprecatedEncryptionKeys(keys ...[]byte) Option {
 			b.deprecatedKeys = append(b.deprecatedKeys, append([]byte(nil), k...))
 		}
 
+		return nil
+	}
+}
+
+// WithLoginScopes replaces the scopes a native login requests on top of
+// the RP's own. Default offline_access, which most IdPs need to issue the
+// refresh token the broker requires; web logins through the same RP do
+// not request it, so they open no offline session at the IdP. Without
+// arguments a native login requests the RP's scopes only.
+func WithLoginScopes(scopes ...string) Option {
+	return func(b *Broker) error {
+		b.loginScopes = slices.Clone(scopes)
 		return nil
 	}
 }

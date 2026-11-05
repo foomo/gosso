@@ -67,7 +67,10 @@ mux.Handle("/oidc/logout", h.Logout)
 By default the callback redirects the browser to the `target` carried in the
 transit cookie (the `?target=` from `/login`, or `/` when absent). The target
 keeps its query, so a login entry can pass state through it (for example
-`?target=/checkout?origin=cart`); the fragment is dropped. Supply
+`?target=/checkout?origin=cart`); the fragment is dropped. A target over
+1024 bytes (JSON-encoded, as the cookie stores it) loses its query, and
+falls back to `/` if the path alone is too long, so it cannot push the
+cookie past the browser limit. Supply
 `oidc.WithOnRedirect` to compute the final destination yourself:
 
 ```go
@@ -143,9 +146,14 @@ would exceed 4000 bytes. It reaches the hooks only after the callback has verifi
 the transit cookie and `state`.
 
 `oidc.WithLoginInitError(func(w, r, err))` replaces that `500` for any
-failure to start the login (cookie too large, random generation failed);
+failure to start the login (transit cookie too large);
 the function owns the response. The native broker uses it to redirect
 the app with `error=server_error`.
+
+`oidc.WithLoginScopes(scopes...)` requests scopes for this login on top of
+the RP's own. Use it for a scope only some logins need: the native broker
+requests `offline_access` this way, so web logins through the same RP do
+not open an offline session at the IdP.
 
 ## Redirecting on callback errors (`WithOnLoginError`)
 
@@ -174,8 +182,9 @@ oidc.WithOnLoginError(func(ctx context.Context, w http.ResponseWriter, r *http.R
 
 ## Refreshing (`RP.Refresh`)
 
-`RP.Refresh` redeems an IdP refresh token (request `offline_access`) and
-returns a freshly verified subject:
+`RP.Refresh` redeems an IdP refresh token (request `offline_access`, with
+`WithExtraScopes` for every login or `oidc.WithLoginScopes` on
+`RP.Login` for only some) and returns a freshly verified subject:
 
 ```go
 sub, err := rp.Refresh(ctx, storedRefreshToken, session.ExternalID)
@@ -198,10 +207,17 @@ default:
 ```
 
 - The subject is rebuilt from the refreshed ID token, or from UserInfo when
-  the IdP returns none; `WithUserInfo(true)` always merges UserInfo in.
-- Its `ExternalID` must equal the one you pass, and UserInfo's `sub` the
-  ID token's, or `Refresh` fails with `ErrRefreshSubjectMismatch` (wrapped
-  in a `*RefreshFailedError`; not `ErrRefreshRejected`).
+  the IdP returns none (OIDC Core §12.2 allows that); `WithUserInfo(true)`
+  always merges UserInfo in.
+- Without a refreshed ID token, `sub.Raw.IDToken` is `nil` and
+  `RawIDToken` empty: check before calling `IDToken.Claims`. Claims the IdP
+  puts only into the ID token are missing then, `groups` typically: if
+  your IdP omits ID tokens on refresh, map those claims into UserInfo as
+  well, or a refreshed subject comes back without its groups.
+- Its `ExternalID` must be present and equal the one you pass, and
+  UserInfo's `sub` the ID token's, or `Refresh` fails with
+  `ErrRefreshSubjectMismatch` (wrapped in a `*RefreshFailedError`; not
+  `ErrRefreshRejected`).
 - `Refresh` does not call the `ErrorLogger` (there is no request); log
   the error yourself. Telemetry: span `oidc.refresh`, counter
   `gosso.oidc.refresh.completed`, histogram `gosso.oidc.refresh.duration`.

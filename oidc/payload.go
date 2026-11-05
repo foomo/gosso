@@ -10,10 +10,13 @@ import (
 type Payload struct {
 	// IDToken is the verified ID token. Treat as read-only: further
 	// calls to Claims() decode into the caller's destination and are
-	// otherwise side-effect free.
+	// otherwise side-effect free. Always set after a login; nil after
+	// RP.Refresh when the IdP returned no ID token (OIDC Core §12.2), in
+	// which case UserInfo carries the claims.
 	IDToken *gooidc.IDToken
 	// RawIDToken is the serialised JWT — useful as an id_token_hint on
-	// RP-initiated logout, for forwarding, or for logging.
+	// RP-initiated logout, for forwarding, or for logging. Empty whenever
+	// IDToken is nil.
 	RawIDToken string
 	// AccessToken is the OAuth2 access token returned by the token
 	// endpoint. It may be empty if the IdP only issued an ID token.
@@ -23,7 +26,8 @@ type Payload struct {
 	// RefreshToken is the OAuth2 refresh token, present only when the
 	// `offline_access` scope was granted.
 	RefreshToken string
-	// UserInfo holds the raw claims from the UserInfo endpoint, set only
-	// if WithUserInfo(true) was supplied and the call succeeded.
+	// UserInfo holds the raw claims from the UserInfo endpoint, set when
+	// WithUserInfo(true) was supplied, or after RP.Refresh when the IdP
+	// returned no ID token.
 	UserInfo map[string]any
 }

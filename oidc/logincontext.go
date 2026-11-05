@@ -5,7 +5,12 @@ import (
 	"maps"
 	"net/http"
 
+	"github.com/foomo/go/options"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/foomo/gosso/internal/safepath"
+	"github.com/foomo/gosso/internal/telemetry"
+	"github.com/foomo/gosso/internal/tokens"
 )
 
 // LoginContext is consumer-defined data carried, signed but not encrypted,
@@ -14,11 +19,12 @@ import (
 type LoginContext map[string]string
 
 // LoginOption configures a single login started with RP.Login.
-type LoginOption func(*loginOptions)
+type LoginOption = options.Option[*loginOptions]
 
 type loginOptions struct {
 	target  string
 	context LoginContext
+	scopes  []string
 	onError func(w http.ResponseWriter, r *http.Request, err error)
 }
 
@@ -45,9 +51,20 @@ func WithLoginContext(lc LoginContext) LoginOption {
 	}
 }
 
+// WithLoginScopes requests scopes for this login on top of the RP's own
+// (WithScopes, WithExtraScopes). Use it for a scope only some logins
+// need, such as offline_access for the native broker: requested on every
+// login, it would open an offline session at the IdP for each web login
+// too.
+func WithLoginScopes(scopes ...string) LoginOption {
+	return func(o *loginOptions) {
+		o.scopes = append(o.scopes, scopes...)
+	}
+}
+
 // WithLoginInitError replaces the default 500 response when the login
-// cannot start (random generation failed, transit cookie too large). fn
-// owns the response; nothing has been written yet.
+// cannot start (transit cookie too large). fn owns the response; nothing
+// has been written yet.
 func WithLoginInitError(fn func(w http.ResponseWriter, r *http.Request, err error)) LoginOption {
 	return func(o *loginOptions) {
 		o.onError = fn
@@ -75,14 +92,20 @@ func LoginContextFromContext(ctx context.Context) (LoginContext, bool) {
 // Login starts an authorization request: it generates fresh state, nonce
 // and PKCE values, stores them with the target and login context in the
 // signed transit cookie and redirects to the IdP. Handlers().Login is
-// Login with the target taken from ?target=.
+// Login with the target taken from ?target=. Every login started here
+// counts in the login telemetry, the native broker's included.
 func (rp *RP) Login(w http.ResponseWriter, r *http.Request, opts ...LoginOption) {
-	ctx := r.Context()
+	ctx, span := telemetry.Tracer().Start(r.Context(), "oidc.login",
+		trace.WithAttributes(oidcProtocolAttr),
+	)
+	defer span.End()
+
+	r = r.WithContext(ctx)
+
+	loginStarted.Add(ctx, 1)
 
 	var o loginOptions
-	for _, opt := range opts {
-		opt(&o)
-	}
+	options.Apply(&o, opts...)
 
 	initFailed := func(stage string, err error) {
 		rp.fail(ctx, r, nil, stage, err)
@@ -95,23 +118,11 @@ func (rp *RP) Login(w http.ResponseWriter, r *http.Request, opts ...LoginOption)
 		http.Error(w, "login init failed", http.StatusInternalServerError)
 	}
 
-	state, err := generateState()
-	if err != nil {
-		initFailed("generate-state", err)
-		return
-	}
-
-	nonce, err := generateNonce()
-	if err != nil {
-		initFailed("generate-nonce", err)
-		return
-	}
-
-	verifier, err := generateVerifier()
-	if err != nil {
-		initFailed("generate-verifier", err)
-		return
-	}
+	// 32 random bytes each; the verifier is 43 characters, within RFC
+	// 7636 §4.1's 43–128
+	state := tokens.Random(32)
+	nonce := tokens.Random(32)
+	verifier := tokens.Random(32)
 
 	if err := rp.transit.write(w, transitData{
 		State:        state,
@@ -124,5 +135,5 @@ func (rp *RP) Login(w http.ResponseWriter, r *http.Request, opts ...LoginOption)
 		return
 	}
 
-	http.Redirect(w, r, rp.authorizeURL(state, nonce, codeChallenge(verifier)), http.StatusFound)
+	http.Redirect(w, r, rp.authorizeURL(state, nonce, tokens.S256(verifier), o.scopes), http.StatusFound)
 }

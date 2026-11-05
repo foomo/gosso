@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	sso "github.com/foomo/gosso"
+	"github.com/foomo/gosso/internal/tokens"
 	"github.com/foomo/gosso/oidc"
 	"github.com/foomo/gosso/oidc/native/repository/store"
 )
@@ -134,7 +135,7 @@ func (b *Broker) issueCode(ctx context.Context, r *http.Request, n nativeLogin, 
 	}
 
 	if sub.Raw.RefreshToken == "" {
-		return "", errors.New("native: IdP issued no refresh token (offline_access?)")
+		return "", errors.New("native: IdP issued no refresh token (see WithLoginScopes)")
 	}
 
 	attrs, err := b.hooks.Authenticate(ctx, r, sub)
@@ -147,13 +148,10 @@ func (b *Broker) issueCode(ctx context.Context, r *http.Request, n nativeLogin, 
 		return "", fmt.Errorf("native: seal idp refresh token: %w", err)
 	}
 
-	code, err := randomToken(32)
-	if err != nil {
-		return "", err
-	}
+	code := tokens.Random(32)
 
 	if err := b.codes.Put(ctx, store.Code{
-		Hash:            hashToken(code),
+		Hash:            tokens.S256(code),
 		ClientID:        n.clientID,
 		RedirectURI:     n.redirectURI,
 		CodeChallenge:   n.challenge,
@@ -188,7 +186,7 @@ func (b *Broker) OnLoginError(web oidc.OnLoginError) oidc.OnLoginError {
 			return web(ctx, w, r, lc, stage, err)
 		}
 
-		b.logError(r, "native-login-"+stage, err)
+		// the RP has logged err already
 
 		if err := b.checkRegistered(n); err != nil {
 			b.logError(r, "native-login-redirect", err)

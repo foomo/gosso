@@ -64,7 +64,6 @@ if err != nil { return err }
 
 rp, err := oidc.New(ctx, issuer, clientID, clientSecret, callbackURL, transitKey,
     b.OnAuthenticated(webOnAuth),
-    oidc.WithExtraScopes("offline_access"),
     oidc.WithOnRedirect(b.OnRedirect(webOnRedirect)), // web hook may be nil
     oidc.WithOnLoginError(b.OnLoginError(nil)),
 )
@@ -77,6 +76,10 @@ mux.Handle("/oidc/app/authorize", h.Authorize)
 mux.Handle("/oidc/app/token", h.Token)
 mux.Handle("/oidc/app/revoke", h.Revoke)
 ```
+
+Leave `offline_access` off the RP: the broker requests it on native logins
+only (`WithLoginScopes`), so web logins through the same RP open no
+offline session at the IdP.
 
 `Attach` fails unless all three wrappers were taken from the broker: a
 forgotten wrapper would silently send native logins down the web path.
@@ -112,6 +115,11 @@ native.Hooks{
   `503 temporarily_unavailable` (the session is kept).
 - `Mint` gets the stored `Session` (subject projection, attributes, IDs,
   times). The broker never stores the tokens it returns.
+- On a refresh, `Authenticate` gets the subject `RP.Refresh` rebuilt. If
+  the IdP returned no new ID token, `sub.Raw.IDToken` is `nil` and the
+  claims come from UserInfo, which may lack `groups`; see
+  [Refreshing](./oidc#refreshing-rp-refresh). The stored subject is
+  replaced by the refreshed one.
 
 ## Endpoints
 
@@ -159,7 +167,10 @@ Treat the refresh token as opaque. Every refresh returns a new one.
 
 ### `POST revoke`
 
-`token=<refresh token>&client_id=…`. Ends the session (RFC 7009). The
+`token=<refresh token>&client_id=…`. Ends the session (RFC 7009), for
+any refresh token the session issued, rotated ones included: whoever holds
+an old token can end the session at the token endpoint anyway, and a
+sign-out must also end a session a thief has refreshed. The
 client must identify itself: a missing or unknown `client_id` is
 `400 invalid_client`, a missing `token` is `400 invalid_request`. Otherwise
 `200 {}`, including for unknown or malformed tokens and tokens of another
@@ -185,7 +196,9 @@ Token and revoke responses are JSON with `Cache-Control: no-store` and
 | refresh token unknown, malformed, other client, session expired or revoked | `400 invalid_grant`, session kept unless expired |
 | refresh token reused: a rotated one presented outside the grace window | `400 invalid_grant`, session deleted |
 | IdP rejects the refresh (`invalid_grant`) | `400 invalid_grant`, session deleted |
-| IdP returns another subject on refresh | `400 invalid_grant`, session deleted |
+| IdP returns another subject, or none, on refresh | `400 invalid_grant`, session deleted |
+| stored IdP refresh token does not decrypt (corrupt) | `400 invalid_grant`, session deleted |
+| stored IdP refresh token sealed with an unknown key | `500 server_error`, session kept (see [Security notes](#security-notes)) |
 | IdP unreachable or 5xx on refresh | `503 temporarily_unavailable`, session kept |
 | `Authenticate` or `Mint` fails on refresh | `503 temporarily_unavailable`, session kept |
 | the request waited 60 s in total for other refreshes of the session | `503 temporarily_unavailable` |
@@ -199,6 +212,7 @@ Token and revoke responses are JSON with `Cache-Control: no-store` and
 | `WithSessionTTL(d)` | `90 days` | absolute session lifetime, counted from login |
 | `WithRotationGrace(d)` | `10s` | how long the previous refresh tokens keep working after a rotation is stored; `0` makes rotation strict (see [Known limitations](#known-limitations)) |
 | `WithDeprecatedEncryptionKeys(keys...)` | | previous 32-byte keys that still decrypt stored IdP refresh tokens |
+| `WithLoginScopes(scopes...)` | `offline_access` | scopes native logins request on top of the RP's; none without arguments |
 | `WithErrorLogger(fn)` | silent | routes runtime errors to your logger |
 | `WithClock(fn)` | `time.Now` | for tests |
 
@@ -262,7 +276,10 @@ has to implement the two interfaces.
 - **IdP refresh token**: AES-256-GCM encrypted, bound to the subject via
   the additional data, so a ciphertext cannot be moved to another record.
   Rotate the key by passing the new one to `New` and the old one to
-  `WithDeprecatedEncryptionKeys`.
+  `WithDeprecatedEncryptionKeys`; keep the old one until the sessions
+  sealed with it have expired. A refresh whose token was sealed with a key
+  the broker no longer knows answers `500` and keeps the session, so
+  configuring a key dropped by mistake again repairs them.
 - **Login context**: the app's `state`, `redirect_uri`, `client_id` and
   `code_challenge` travel signed (not encrypted) in the transit cookie.
   None of them is secret.
@@ -304,15 +321,17 @@ has to implement the two interfaces.
   without the cookie there is no trusted redirect URI to send the app.
   Raise `oidc.WithTransitTTL` (default 5 min) if users need longer; the
   app should time out its own wait and offer to start the login again.
-- **An IdP refresh token is required.** Request `offline_access` (or
-  whatever your IdP needs to issue one). A login without one fails right
-  away with `error=server_error` instead of producing a session that dies
-  at its first refresh.
+- **An IdP refresh token is required.** Native logins request
+  `offline_access`; use `WithLoginScopes` if your IdP needs another scope
+  to issue one. A login without one fails right away with
+  `error=server_error` instead of producing a session that dies at its
+  first refresh.
 
 Whatever fails after the IdP issued a new refresh token (UserInfo,
 `Authenticate`, `Mint`, a repository, the app hanging up), the broker keeps
 that token and leaves the app's refresh token valid, so the app's retry
 with the same refresh token works. The exception is a refresh whose
-subject differs from the session's: no retry can fix that, so the session
-is deleted and the app has to log in again. Access tokens are minted once, after
+subject differs from the session's, or lacks the external-id claim: no
+retry can fix that, so the session is deleted and the app has to log in
+again. Access tokens are minted once, after
 the rotation is stored; if `Mint` fails, the rotation is taken back.

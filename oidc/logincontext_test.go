@@ -248,6 +248,43 @@ func TestLogin_ContextReachesHooks(t *testing.T) {
 	assert.Equal(t, "/", f.rec.target)
 }
 
+func TestLogin_LongTargetDoesNotBreakLogin(t *testing.T) {
+	t.Parallel()
+
+	f := newRPFixture(t, nil)
+
+	// a query this long would overflow the transit cookie: it is dropped,
+	// the path kept, and the login goes ahead
+	target := "/account?" + strings.Repeat("x=1&", 1000)
+
+	resp := f.get(t, "/login?"+url.Values{"target": {target}}.Encode())
+	require.Equal(t, http.StatusFound, resp.StatusCode, resp.Body)
+	assert.Equal(t, "/account", resp.Header.Get("Location"))
+}
+
+func TestLogin_Scopes(t *testing.T) {
+	t.Parallel()
+
+	f := newRPFixture(t, nil)
+
+	scopeOf := func(opts ...LoginOption) string {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/login", nil)
+		rec := httptest.NewRecorder()
+		f.rp.Login(rec, req, opts...)
+		require.Equal(t, http.StatusFound, rec.Code)
+
+		loc, err := url.Parse(rec.Header().Get("Location"))
+		require.NoError(t, err)
+
+		return loc.Query().Get("scope")
+	}
+
+	assert.Equal(t, "openid profile email", scopeOf(), "RP scopes only")
+	assert.Equal(t, "openid profile email offline_access", scopeOf(WithLoginScopes("offline_access", "email", "")),
+		"added for this login, without duplicates or empties")
+	assert.Equal(t, "openid profile email", scopeOf(), "other logins unaffected")
+}
+
 func TestLogin_WebUnchanged(t *testing.T) {
 	t.Parallel()
 

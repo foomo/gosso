@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
@@ -271,10 +272,16 @@ func (rp *RP) scopes() []string {
 		base = append([]string{gooidc.ScopeOpenID}, rp.baseScopes...)
 	}
 
-	seen := make(map[string]struct{}, len(base)+len(rp.extraScopes))
+	return mergeScopes(base, rp.extraScopes)
+}
 
-	out := make([]string, 0, len(base)+len(rp.extraScopes))
-	for _, s := range slices.Concat(base, rp.extraScopes) {
+// mergeScopes concatenates scope lists, dropping empties and duplicates.
+func mergeScopes(lists ...[]string) []string {
+	all := slices.Concat(lists...)
+	seen := make(map[string]struct{}, len(all))
+
+	out := make([]string, 0, len(all))
+	for _, s := range all {
 		if s == "" {
 			continue
 		}
@@ -290,14 +297,20 @@ func (rp *RP) scopes() []string {
 	return out
 }
 
-// authorizeURL builds the /authorize URL with all OIDC + PKCE params.
-func (rp *RP) authorizeURL(state, nonce, challenge string) string {
-	return rp.oauth2Cfg.AuthCodeURL(
-		state,
+// authorizeURL builds the /authorize URL with all OIDC + PKCE params;
+// loginScopes are requested on top of the RP's scopes.
+func (rp *RP) authorizeURL(state, nonce, challenge string, loginScopes []string) string {
+	opts := []oauth2.AuthCodeOption{
 		gooidc.Nonce(nonce),
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
-	)
+	}
+
+	if len(loginScopes) > 0 {
+		opts = append(opts, oauth2.SetAuthURLParam("scope", strings.Join(mergeScopes(rp.oauth2Cfg.Scopes, loginScopes), " ")))
+	}
+
+	return rp.oauth2Cfg.AuthCodeURL(state, opts...)
 }
 
 // newInstrumentedHTTPClient builds the default HTTP client used by this

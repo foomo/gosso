@@ -57,29 +57,6 @@ func TestValidChallenge(t *testing.T) {
 	assert.False(t, validChallenge("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-c="), "padded")
 }
 
-func TestRandomToken(t *testing.T) {
-	t.Parallel()
-
-	a, err := randomToken(32)
-	require.NoError(t, err)
-	assert.Len(t, a, 43)
-
-	b, err := randomToken(32)
-	require.NoError(t, err)
-	assert.NotEqual(t, a, b)
-
-	id, err := randomToken(16)
-	require.NoError(t, err)
-	assert.Len(t, id, 22)
-}
-
-func TestHashToken(t *testing.T) {
-	t.Parallel()
-
-	// base64url(sha256("abc"))
-	assert.Equal(t, "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0", hashToken("abc"))
-}
-
 func TestSealer(t *testing.T) {
 	t.Parallel()
 

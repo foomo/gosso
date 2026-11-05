@@ -23,7 +23,6 @@
 //	b, err := native.New(codes, sessions, hooks, clients, key)
 //	rp, err := oidc.New(ctx, issuer, id, secret, callbackURL, transitKey,
 //		b.OnAuthenticated(webOnAuth),
-//		oidc.WithExtraScopes("offline_access"),
 //		oidc.WithOnRedirect(b.OnRedirect(webOnRedirect)),
 //		oidc.WithOnLoginError(b.OnLoginError(nil)))
 //	err = b.Attach(rp)

@@ -3,7 +3,9 @@ package native
 import (
 	"net/http"
 	"net/url"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/foomo/gosso/oidc/native/repository"
 	"github.com/stretchr/testify/assert"
@@ -66,6 +68,37 @@ func TestRevoke(t *testing.T) {
 		_, err = f.sessions.Get(t.Context(), id)
 		require.ErrorIs(t, err, repository.ErrNotFound)
 	})
+
+	// a rotated token ends the session at the token endpoint (reuse), so
+	// it must end it here too: otherwise a thief who refreshed first keeps
+	// the session through the user's sign-out
+	for name, rotations := range map[string]int{
+		"previous token after grace": 1,
+		"retired token":              2,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			rt, id := issue(t, f)
+
+			for i := range rotations {
+				s, err := f.sessions.Get(t.Context(), id)
+				require.NoError(t, err)
+
+				next := s
+				retire(&next, "rotated-"+strconv.Itoa(i), f.clock.Now())
+				require.NoError(t, f.sessions.Rotate(t.Context(), next))
+			}
+
+			f.clock.Advance(11 * time.Second) // grace window closed
+
+			assert.Equal(t, http.StatusOK, revoke(t, f, url.Values{"token": {rt}, "client_id": {clientIOS}}).status)
+
+			_, err := f.sessions.Get(t.Context(), id)
+			require.ErrorIs(t, err, repository.ErrNotFound)
+		})
+	}
 
 	keeps := map[string]func(rt, id string) url.Values{
 		"wrong secret": func(_, id string) url.Values {

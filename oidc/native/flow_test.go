@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/foomo/gosso/internal/tokens"
 )
 
 func TestFlow_LoginTokenRefreshRevoke(t *testing.T) {
@@ -19,7 +21,7 @@ func TestFlow_LoginTokenRefreshRevoke(t *testing.T) {
 	verifier := strings.Repeat("V", 64)
 	state := "af0ifjsldkj"
 
-	resp := f.browse(t, "/app/authorize?"+authorizeQuery(state, hashToken(verifier)).Encode())
+	resp := f.browse(t, "/app/authorize?"+authorizeQuery(state, tokens.S256(verifier)).Encode())
 	require.Equal(t, http.StatusFound, resp.StatusCode)
 
 	location := resp.Header.Get("Location")
@@ -67,7 +69,7 @@ func TestFlow_UserCancels(t *testing.T) {
 	f := newFixture(t)
 	f.idp.SetAuthorizeError("access_denied")
 
-	loc := f.login(t, "st", hashToken(strings.Repeat("v", 43)))
+	loc := f.login(t, "st", tokens.S256(strings.Repeat("v", 43)))
 	assert.Equal(t, appRedirect+"?error=access_denied&state=st", loc.String())
 }
 
@@ -77,7 +79,7 @@ func TestFlow_UnknownIdPErrorBecomesServerError(t *testing.T) {
 	f := newFixture(t)
 	f.idp.SetAuthorizeError("weird")
 
-	loc := f.login(t, "st", hashToken(strings.Repeat("v", 43)))
+	loc := f.login(t, "st", tokens.S256(strings.Repeat("v", 43)))
 	assert.Equal(t, appRedirect+"?error=server_error&state=st", loc.String())
 }
 
@@ -120,7 +122,7 @@ func TestFlow_NoIDPRefreshToken(t *testing.T) {
 	f := newFixture(t)
 	f.idp.SetIssueRefreshToken(false)
 
-	loc := f.login(t, "st", hashToken(strings.Repeat("v", 43)))
+	loc := f.login(t, "st", tokens.S256(strings.Repeat("v", 43)))
 	assert.Equal(t, appRedirect+"?error=server_error&state=st", loc.String())
 
 	n, err := f.codes.Collection().CountAll(t.Context())
@@ -134,7 +136,7 @@ func TestFlow_AuthenticateFails(t *testing.T) {
 	f := newFixture(t)
 	f.setAuthenticateErr(errHook)
 
-	loc := f.login(t, "st", hashToken(strings.Repeat("v", 43)))
+	loc := f.login(t, "st", tokens.S256(strings.Repeat("v", 43)))
 	assert.Equal(t, appRedirect+"?error=server_error&state=st", loc.String())
 }
 

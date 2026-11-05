@@ -20,6 +20,7 @@ import (
 	sso "github.com/foomo/gosso"
 	"github.com/foomo/gosso/internal/fakeidp"
 	"github.com/foomo/gosso/internal/mongotest"
+	"github.com/foomo/gosso/internal/tokens"
 	"github.com/foomo/gosso/oidc"
 	"github.com/foomo/gosso/oidc/native/repository"
 	"github.com/foomo/gosso/oidc/native/repository/store"
@@ -47,8 +48,12 @@ type testClock struct {
 	now time.Time
 }
 
+// newTestClock starts at the real time: the repositories carry TTL indexes,
+// and MongoDB removes documents whose expiresAt is past by its own clock,
+// so a clock fixed in the past would let them vanish mid-test. Truncated
+// to milliseconds, the precision of BSON dates.
 func newTestClock() *testClock {
-	return &testClock{now: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	return &testClock{now: time.Now().UTC().Truncate(time.Millisecond)}
 }
 
 func (c *testClock) Now() time.Time {
@@ -78,14 +83,15 @@ type fixture struct {
 	server   *httptest.Server
 	client   *http.Client
 
-	mu               sync.Mutex
-	authenticateErr  error
-	mintErr          error
-	authenticated    []sso.Subject[oidc.Payload]
-	authenticateReqs []error // r.Context().Err() as each Authenticate saw it
-	webAuthCalls     int
-	webRedirectCalls int
-	mints            int
+	mu                 sync.Mutex
+	authenticateErr    error
+	authenticatePanics bool
+	mintErr            error
+	authenticated      []sso.Subject[oidc.Payload]
+	authenticateReqs   []error // r.Context().Err() as each Authenticate saw it
+	webAuthCalls       int
+	webRedirectCalls   int
+	mints              int
 }
 
 func newFixture(t *testing.T, opts ...Option) *fixture {
@@ -127,6 +133,10 @@ func newFixtureWithSessions(t *testing.T, wrap func(repository.Session) reposito
 			defer f.mu.Unlock()
 
 			f.authenticateReqs = append(f.authenticateReqs, r.Context().Err())
+
+			if f.authenticatePanics {
+				panic("authenticate hook panicked")
+			}
 
 			if f.authenticateErr != nil {
 				return nil, f.authenticateErr
@@ -185,7 +195,6 @@ func newFixtureWithSessions(t *testing.T, wrap func(repository.Session) reposito
 	rp, err := oidc.New(t.Context(), f.idp.URL, "rp-client", "rp-secret", f.server.URL+"/callback",
 		[]byte(strings.Repeat("t", 32)),
 		b.OnAuthenticated(webOnAuth),
-		oidc.WithExtraScopes("offline_access"),
 		oidc.WithOnRedirect(b.OnRedirect(webOnRedirect)),
 		oidc.WithOnLoginError(b.OnLoginError(nil)),
 	)
@@ -240,6 +249,13 @@ func (f *fixture) setAuthenticateErr(err error) {
 	defer f.mu.Unlock()
 
 	f.authenticateErr = err
+}
+
+func (f *fixture) setAuthenticatePanics(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.authenticatePanics = on
 }
 
 func (f *fixture) setMintErr(err error) {
@@ -366,7 +382,7 @@ func (f *fixture) fullLogin(t *testing.T) string {
 	t.Helper()
 
 	verifier := strings.Repeat("v", 43)
-	loc := f.login(t, "app-state", hashToken(verifier))
+	loc := f.login(t, "app-state", tokens.S256(verifier))
 
 	code := loc.Query().Get("code")
 	require.NotEmpty(t, code, "app redirect %s", loc)

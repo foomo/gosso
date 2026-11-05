@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/foomo/gosso/internal/tokens"
 	"github.com/foomo/gosso/oidc/native/repository/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,17 +21,16 @@ const testVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 func (f *fixture) seedCode(t *testing.T) string {
 	t.Helper()
 
-	code, err := randomToken(32)
-	require.NoError(t, err)
+	code := tokens.Random(32)
 
 	sealed, err := f.broker.sealer.seal("idp-rt", sealAAD("alice"))
 	require.NoError(t, err)
 
 	require.NoError(t, f.codes.Put(t.Context(), store.Code{
-		Hash:            hashToken(code),
+		Hash:            tokens.S256(code),
 		ClientID:        clientIOS,
 		RedirectURI:     appRedirect,
-		CodeChallenge:   hashToken(testVerifier),
+		CodeChallenge:   tokens.S256(testVerifier),
 		Subject:         store.Subject{ExternalID: "alice", Email: "alice@example.com"},
 		Attributes:      store.Attributes{"k": "v"},
 		IDPRefreshToken: sealed,
@@ -83,7 +83,7 @@ func TestToken_AuthorizationCode(t *testing.T) {
 
 		s, err := f.sessions.Get(t.Context(), id)
 		require.NoError(t, err)
-		assert.Equal(t, []string{hashToken(secret)}, s.RefreshHashes)
+		assert.Equal(t, []string{tokens.S256(secret)}, s.RefreshHashes)
 		assert.Equal(t, clientIOS, s.ClientID)
 		assert.Equal(t, "alice", s.Subject.ExternalID)
 		assert.Equal(t, store.Attributes{"k": "v"}, s.Attributes)

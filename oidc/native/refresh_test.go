@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/foomo/gosso/internal/fakeidp"
+	"github.com/foomo/gosso/internal/tokens"
 	"github.com/foomo/gosso/oidc/native/repository"
 	"github.com/foomo/gosso/oidc/native/repository/store"
 )
@@ -58,7 +59,7 @@ func TestToken_Refresh(t *testing.T) {
 	require.NoError(t, err)
 
 	_, oldSecret, _ := cutToken(rt)
-	assert.Equal(t, []string{hashToken(oldSecret)}, after.PreviousRefreshHashes, "old token is in grace")
+	assert.Equal(t, []string{tokens.S256(oldSecret)}, after.PreviousRefreshHashes, "old token is in grace")
 	assert.Empty(t, after.RefreshLease, "lease released")
 	assert.True(t, after.RotatedAt.Equal(f.clock.Now()))
 	assert.True(t, after.LastUsedAt.Equal(f.clock.Now()))
@@ -205,6 +206,42 @@ func TestToken_RefreshAuthenticateFails(t *testing.T) {
 	assert.Equal(t, 2, f.idp.RefreshCalls())
 }
 
+func TestToken_RefreshAuthenticatePanicKeepsIdPToken(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	rt := f.fullLogin(t)
+	f.setAuthenticatePanics(true)
+
+	// the server recovers the panic and drops the connection
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, f.server.URL+"/app/token", strings.NewReader(url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {rt},
+		"client_id":     {clientIOS},
+	}.Encode()))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+
+	require.Error(t, err)
+
+	s, err := sessionOf(t, f, rt)
+	require.NoError(t, err)
+	assert.Empty(t, s.RefreshLease, "lease released")
+
+	f.clock.Advance(time.Minute)
+	f.setAuthenticatePanics(false)
+
+	// the IdP rotated its refresh token before the hook panicked and
+	// retired the old one; the broker must have kept the new one
+	assert.Equal(t, http.StatusOK, f.refresh(t, rt).status)
+	assert.Equal(t, 2, f.idp.RefreshCalls())
+}
+
 func TestToken_RefreshMintFails(t *testing.T) {
 	t.Parallel()
 
@@ -230,6 +267,61 @@ func TestToken_RefreshSubjectChanged(t *testing.T) {
 
 	_, err := sessionOf(t, f, rt)
 	require.ErrorIs(t, err, repository.ErrNotFound, "session ended")
+}
+
+// replaceIDPToken overwrites the stored IdP refresh token of rt's session.
+func replaceIDPToken(t *testing.T, f *fixture, rt string, mutate func(*store.EncryptedToken)) {
+	t.Helper()
+
+	s, err := sessionOf(t, f, rt)
+	require.NoError(t, err)
+
+	next := s
+	next.IDPRefreshToken.Ciphertext = slices.Clone(s.IDPRefreshToken.Ciphertext)
+	mutate(&next.IDPRefreshToken)
+	require.NoError(t, f.sessions.Rotate(t.Context(), next))
+}
+
+func TestToken_RefreshCorruptIDPTokenEndsSession(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	rt := f.fullLogin(t)
+
+	// a known key that cannot open the token: no retry can fix that
+	replaceIDPToken(t, f, rt, func(tok *store.EncryptedToken) {
+		tok.Ciphertext[len(tok.Ciphertext)-1] ^= 0xff
+	})
+
+	assertOAuthError(t, f.refresh(t, rt), http.StatusBadRequest, errInvalidGrant)
+
+	_, err := sessionOf(t, f, rt)
+	require.ErrorIs(t, err, repository.ErrNotFound, "session ended")
+	assert.Zero(t, f.idp.RefreshCalls())
+}
+
+func TestToken_RefreshUnknownKeyKeepsSession(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	rt := f.fullLogin(t)
+
+	other, err := newSealer([]byte(strings.Repeat("k", 32)))
+	require.NoError(t, err)
+
+	sealed, err := other.seal("idp-rt", sealAAD("alice"))
+	require.NoError(t, err)
+
+	// most likely a key rotated without WithDeprecatedEncryptionKeys:
+	// configuring the key again must bring the session back
+	replaceIDPToken(t, f, rt, func(tok *store.EncryptedToken) { *tok = sealed })
+
+	assertOAuthError(t, f.refresh(t, rt), http.StatusInternalServerError, errServerError)
+
+	s, err := sessionOf(t, f, rt)
+	require.NoError(t, err, "session kept")
+	assert.Empty(t, s.RefreshLease, "lease released")
+	assert.Zero(t, f.idp.RefreshCalls())
 }
 
 func TestToken_RefreshExpiredSession(t *testing.T) {

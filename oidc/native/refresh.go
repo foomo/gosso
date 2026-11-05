@@ -9,6 +9,7 @@ import (
 	"time"
 
 	sso "github.com/foomo/gosso"
+	"github.com/foomo/gosso/internal/tokens"
 	"github.com/foomo/gosso/oidc"
 	"github.com/foomo/gosso/oidc/native/repository"
 	"github.com/foomo/gosso/oidc/native/repository/store"
@@ -27,8 +28,11 @@ const (
 	// lease is checked against the reading instance's clock). Skew
 	// beyond the margin can let a second refresh take over.
 	refreshLeaseMargin = refreshWorkTimeout
-	// leasePollInterval is how often a waiting refresh re-reads the session.
-	leasePollInterval = 50 * time.Millisecond
+	// leasePollInterval is how soon a waiting refresh first re-reads the
+	// session; each further wait doubles, up to maxLeasePollInterval, so a
+	// lease held by a stuck refresh costs a few dozen reads, not hundreds.
+	leasePollInterval    = 50 * time.Millisecond
+	maxLeasePollInterval = time.Second
 	// maxCurrentHashes bounds the secrets of one generation: the
 	// rotation's own plus those of concurrent duplicates.
 	maxCurrentHashes = 8
@@ -74,7 +78,7 @@ func (b *Broker) refreshTokenGrant(w http.ResponseWriter, r *http.Request, rp *o
 		return
 	}
 
-	h := hashToken(secret)
+	h := tokens.S256(secret)
 
 	// one deadline for all waits on other refreshes' leases
 	waitCtx, cancelWait := context.WithTimeout(ctx, refreshWorkTimeout+refreshLeaseMargin)
@@ -166,19 +170,21 @@ func (g *refreshGrant) deleteSession(ctx context.Context, id string) {
 	}
 }
 
-// waitForLease polls until the lease held on s is released or expires.
-// It reports false, after answering, when the wait gave up; ctx carries
-// the request's overall wait deadline.
+// waitForLease polls, backing off, until the lease held on s is released
+// or expires. It reports false, after answering, when the wait gave up;
+// ctx carries the request's overall wait deadline.
 func (g *refreshGrant) waitForLease(ctx context.Context, s store.Session) bool {
-	ticker := time.NewTicker(leasePollInterval)
-	defer ticker.Stop()
+	interval := leasePollInterval
+
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			g.fail(ctx, http.StatusServiceUnavailable, errTemporarilyUnavailable, "lease-wait", "refresh in progress, retry", ctx.Err())
 			return false
-		case <-ticker.C:
+		case <-timer.C:
 		}
 
 		cur, err := g.b.sessions.Get(ctx, s.ID)
@@ -193,6 +199,9 @@ func (g *refreshGrant) waitForLease(ctx context.Context, s store.Session) bool {
 		if cur.RefreshLease != s.RefreshLease || !g.b.leased(cur) {
 			return true
 		}
+
+		interval = min(2*interval, maxLeasePollInterval)
+		timer.Reset(interval)
 	}
 }
 
@@ -212,11 +221,7 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s store.Session) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(reqCtx), refreshWorkTimeout)
 	defer cancel()
 
-	lease, err := randomToken(16)
-	if err != nil {
-		g.fail(ctx, http.StatusInternalServerError, errServerError, "random", "", err)
-		return true
-	}
+	lease := tokens.Random(16)
 
 	claimed := s
 	claimed.RefreshLease = lease
@@ -251,7 +256,16 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s store.Session) bool {
 	}
 
 	idpToken, err := b.sealer.open(s.IDPRefreshToken, sealAAD(s.Subject.ExternalID))
-	if err != nil {
+	if errors.Is(err, errUndecryptable) {
+		// no retry can open it: end the session so the app logs in again
+		g.deleteSession(ctx, s.ID)
+		g.fail(ctx, http.StatusBadRequest, errInvalidGrant, "decrypt-idp-token", "refresh token invalid", err)
+
+		return true
+	} else if err != nil {
+		// an unknown key, most likely rotated without
+		// WithDeprecatedEncryptionKeys: configuring it again repairs the
+		// session, so keep it and the app's token
 		release(nil)
 		g.fail(ctx, http.StatusInternalServerError, errServerError, "decrypt-idp-token", "", err)
 
@@ -299,9 +313,7 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s store.Session) bool {
 		return true
 	}
 
-	// the request carries the detached ctx too, so a hook using
-	// r.Context() is not cut off when the app hangs up
-	attrs, err := b.hooks.Authenticate(ctx, g.r.WithContext(ctx), sub)
+	attrs, err := g.authenticate(ctx, sub, func() { release(&sealed) })
 	if err != nil {
 		release(&sealed)
 		g.fail(ctx, http.StatusServiceUnavailable, errTemporarilyUnavailable, "authenticate", "", err)
@@ -325,15 +337,8 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s store.Session) bool {
 		return true
 	}
 
-	secret, err := randomToken(32)
-	if err != nil {
-		release(&sealed)
-		g.fail(ctx, http.StatusInternalServerError, errServerError, "random", "", err)
-
-		return true
-	}
-
-	newHash := hashToken(secret)
+	secret := tokens.Random(32)
+	newHash := tokens.S256(secret)
 
 	var before store.Session
 
@@ -369,6 +374,23 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s store.Session) bool {
 	g.succeed(ctx, resp)
 
 	return true
+}
+
+// authenticate runs Hooks.Authenticate for a refresh. Should the hook
+// panic, onPanic runs before the panic goes on: it stores the IdP's new
+// refresh token and frees the lease, as the IdP may already have retired
+// the old token.
+func (g *refreshGrant) authenticate(ctx context.Context, sub sso.Subject[oidc.Payload], onPanic func()) (store.Attributes, error) {
+	defer func() {
+		if p := recover(); p != nil {
+			onPanic()
+			panic(p)
+		}
+	}()
+
+	// the request carries the detached ctx too, so a hook using
+	// r.Context() is not cut off when the app hangs up
+	return g.b.hooks.Authenticate(ctx, g.r.WithContext(ctx), sub)
 }
 
 // unrotate takes back a stored rotation whose response never went out,
@@ -417,13 +439,8 @@ func (g *refreshGrant) graceHit(ctx context.Context, s store.Session) bool {
 		return true
 	}
 
-	secret, err := randomToken(32)
-	if err != nil {
-		g.fail(ctx, http.StatusInternalServerError, errServerError, "random", "", err)
-		return true
-	}
-
-	newHash := hashToken(secret)
+	secret := tokens.Random(32)
+	newHash := tokens.S256(secret)
 
 	next := s
 	next.RefreshHashes = append(slices.Clone(s.RefreshHashes), newHash)

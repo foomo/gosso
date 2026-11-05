@@ -99,6 +99,7 @@ func (b *Broker) handleAuthorize(w http.ResponseWriter, r *http.Request, rp *oid
 			fail(errServerError)
 		}),
 		oidc.WithLoginTarget("/"),
+		oidc.WithLoginScopes(b.loginScopes...),
 		oidc.WithLoginContext(nativeLogin{
 			clientID:    q.Get("client_id"),
 			redirectURI: redirectURI,

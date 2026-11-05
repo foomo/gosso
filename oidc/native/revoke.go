@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/foomo/gosso/internal/telemetry"
+	"github.com/foomo/gosso/internal/tokens"
 	"github.com/foomo/gosso/oidc"
 	"github.com/foomo/gosso/oidc/native/repository"
 	"github.com/foomo/gosso/oidc/native/repository/store"
@@ -60,8 +61,11 @@ func (b *Broker) handleRevoke(w http.ResponseWriter, r *http.Request, _ *oidc.RP
 }
 
 // revoke deletes the session token belongs to, if the session is client's
-// and token one of its current or in-grace refresh tokens. Anything else
-// is a no-op; only a repository failure is an error.
+// and token one of its refresh tokens: current, previous or retired. A
+// rotated token ends the session at the token endpoint too (reuse), so a
+// thief who refreshed first cannot keep the session through the user's
+// sign-out. Anything else is a no-op; only a repository failure is an
+// error.
 func (b *Broker) revoke(r *http.Request, client Client, token string) error {
 	ctx := r.Context()
 
@@ -78,7 +82,7 @@ func (b *Broker) revoke(r *http.Request, client Client, token string) error {
 		return err
 	}
 
-	if s.ClientID != client.ID || !b.matchesSession(s, hashToken(secret)) {
+	if s.ClientID != client.ID || !issuedBy(s, tokens.S256(secret)) {
 		return nil
 	}
 
@@ -90,10 +94,12 @@ func (b *Broker) revoke(r *http.Request, client Client, token string) error {
 	return nil
 }
 
-// matchesSession reports whether h is one of the session's current refresh
-// hashes, or a previous one within the rotation grace window.
-func (b *Broker) matchesSession(s store.Session, h string) bool {
-	return slices.Contains(s.RefreshHashes, h) || b.inGrace(s, h)
+// issuedBy reports whether h is one of the session's refresh hashes, of
+// any generation.
+func issuedBy(s store.Session, h string) bool {
+	return slices.Contains(s.RefreshHashes, h) ||
+		slices.Contains(s.PreviousRefreshHashes, h) ||
+		slices.Contains(s.RetiredRefreshHashes, h)
 }
 
 // inGrace reports whether h is a previous refresh hash and the grace

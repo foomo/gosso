@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -9,6 +10,10 @@ import (
 
 	sso "github.com/foomo/gosso"
 )
+
+// errMissingExternalID means the claims carry no value for the configured
+// external-id claim.
+var errMissingExternalID = errors.New("missing external id claim")
 
 // buildSubject merges ID token claims with the optional UserInfo claims
 // and projects them into an sso.Subject via the configured ClaimMap.
@@ -44,7 +49,7 @@ func buildSubject(idToken *gooidc.IDToken, rawIDToken string, token oauthToken, 
 	}
 
 	if sub.ExternalID == "" {
-		return sso.Subject[Payload]{}, fmt.Errorf("id token missing %q claim", cm.ExternalID)
+		return sso.Subject[Payload]{}, fmt.Errorf("%w: id token missing %q claim", errMissingExternalID, cm.ExternalID)
 	}
 
 	return sub, nil

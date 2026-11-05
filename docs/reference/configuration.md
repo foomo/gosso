@@ -64,7 +64,19 @@ column.
 | `WithHTTPClient(*http.Client)` | instrumented, 15s timeout | Used for discovery, token, and UserInfo calls. |
 | `WithBootstrapTimeout(duration)` | `30s` | Bounds the time `New` will spend on OIDC discovery. |
 
-## `native.New(store, hooks, clients, encryptionKey, opts ...Option)`
+### `RP.Login` options
+
+Per-login options for `rp.Login(w, r, opts ...LoginOption)`; `Handlers().Login`
+is `Login` with `WithLoginTarget(r.URL.Query().Get("target"))`.
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `WithLoginTarget(string)` | `/` | Post-login target, sanitised like `?target=` (app-local paths only, over 1024 bytes the query is dropped). |
+| `WithLoginContext(LoginContext)` | | Signed (not encrypted) data handed to `OnAuthenticated`, `OnRedirect` and `OnLoginError` on the callback. |
+| `WithLoginScopes(...string)` | | Scopes requested for this login on top of the RP's own. |
+| `WithLoginInitError(fn)` | `500` | Replaces the response when the login cannot start (transit cookie too large). |
+
+## `native.New(codes, sessions, hooks, clients, encryptionKey, opts ...Option)`
 
 See [Native apps](../guide/native).
 
@@ -72,7 +84,8 @@ See [Native apps](../guide/native).
 
 | Parameter | Type | Purpose |
 | --- | --- | --- |
-| `store` | `native.Store` | Codes and refresh sessions. `native.NewMemoryStore()` or `mongostore.New(...)`. |
+| `codes` | `repository.Code` | Pending one-time codes. `repository.NewDefaultCode(persistor)` on MongoDB. |
+| `sessions` | `repository.Session` | Refresh sessions. `repository.NewDefaultSession(persistor)` on MongoDB. |
 | `hooks` | `native.Hooks` | `Authenticate` (login and every refresh) and `Mint` (access tokens). Both required. |
 | `clients` | `[]native.Client` | Registered apps: unique `ID`, at least one exact `RedirectURIs` entry (scheme required, no fragment). |
 | `encryptionKey` | `[]byte` | AES-256-GCM key for stored IdP refresh tokens. Exactly 32 bytes. |
@@ -85,14 +98,19 @@ See [Native apps](../guide/native).
 | `WithSessionTTL(duration)` | `90 days` | Absolute lifetime of a refresh session. |
 | `WithRotationGrace(duration)` | `10s` | How long the previous refresh token keeps working after a rotation. `0` disables. |
 | `WithDeprecatedEncryptionKeys(...[]byte)` | | Previous 32-byte keys that still decrypt. Empty entries are skipped. |
+| `WithLoginScopes(...string)` | `offline_access` | Scopes native logins request on top of the RP's. No arguments: none. |
 | `WithErrorLogger(fn)` | silent | Routes runtime errors to the supplied logger. |
 | `WithClock(func() time.Time)` | `time.Now` | For tests. |
 
-## `mongostore.New(persistor *keelmongo.Persistor, opts ...Option)`
+## `oidc/native/repository`
 
-| Option | Default | Purpose |
-| --- | --- | --- |
-| `WithCodesCollection(string)` | `gosso_native_codes` | Codes collection. |
-| `WithSessionsCollection(string)` | `gosso_native_sessions` | Sessions collection. |
+| Constructor | Purpose |
+| --- | --- |
+| `NewDefaultCode(*keelmongo.Persistor)` | Codes in `gosso_native_codes` (`DefaultCodeName`), indexes `DefaultCodeIndices`. |
+| `NewDefaultSession(*keelmongo.Persistor)` | Sessions in `gosso_native_sessions` (`DefaultSessionName`), indexes `DefaultSessionIndices`. |
+| `NewCode(*keelmongo.Collection)` | Codes in a collection you opened yourself; it must carry `DefaultCodeIndices` or equivalents. |
+| `NewSession(*keelmongo.Collection)` | Sessions likewise, with `DefaultSessionIndices`. |
 
-Both collections get a TTL index on `expiresAt` (`expireAfterSeconds: 0`).
+Both index sets are a unique index on `id` and a TTL index on `expiresAt`
+(`expireAfterSeconds: 0`). The TTL index only collects garbage: the broker
+checks expiry itself.
