@@ -22,7 +22,7 @@ require (
 	github.com/foomo/keel v0.31.0 // indirect
 	github.com/foomo/mongo-lock v0.2.0 // indirect
 	github.com/foomo/opentelemetry-go v0.5.0 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect

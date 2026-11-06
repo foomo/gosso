@@ -53,8 +53,8 @@ github.com/foomo/mongo-lock v0.2.0 h1:xURP2FijZ/feACB5YL1UKUXk23M+x5L+yltEK+sJm0
 github.com/foomo/mongo-lock v0.2.0/go.mod h1:5LMCz8IeaTMCWcgh+aPoDeIjY1qpu8MXbx+FNrGAUFA=
 github.com/foomo/opentelemetry-go v0.5.0 h1:4MHCj7cRB+Jr8AZsrhQ+J3M/4Gka/mXG0Xv+uv6RNDI=
 github.com/foomo/opentelemetry-go v0.5.0/go.mod h1:3jSEAGFXOJMtFLiLXepEQcr9Fkz1g/JqoWqlcihW/pk=
-github.com/go-jose/go-jose/v4 v4.1.4 h1:moDMcTHmvE6Groj34emNPLs/qtYXRVcd6S7NHbHz3kA=
-github.com/go-jose/go-jose/v4 v4.1.4/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=
+github.com/go-jose/go-jose/v4 v4.1.6 h1:sNRkftxFJxwsILiQukqp5z83QBSmntVwmgRY7AqBDO4=
+github.com/go-jose/go-jose/v4 v4.1.6/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.4.4 h1:tG4xh9yMsRCAiodLVTxyrkzSZ9+o0L1Kg/+cPVcbP/8=
 github.com/go-logr/logr v1.4.4/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
