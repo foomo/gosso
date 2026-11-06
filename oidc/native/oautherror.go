@@ -12,6 +12,7 @@ const (
 	errInvalidGrant            = "invalid_grant"
 	errUnsupportedGrantType    = "unsupported_grant_type"
 	errUnsupportedResponseType = "unsupported_response_type"
+	errAccessDenied            = "access_denied"
 	errTemporarilyUnavailable  = "temporarily_unavailable"
 	errServerError             = "server_error"
 )

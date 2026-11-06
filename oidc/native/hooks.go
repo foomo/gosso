@@ -168,8 +168,9 @@ func (b *Broker) issueCode(ctx context.Context, r *http.Request, n nativeLogin, 
 
 // OnLoginError wraps the web OnLoginError hook. A failed native login
 // redirects to the app with error and state: the IdP's own error for a
-// user-facing outcome (access_denied, login_required, ...), server_error
-// for everything else. Other logins are delegated to web (nil keeps the
+// user-facing outcome (access_denied, login_required, ...), access_denied
+// for a Hooks.Authenticate error wrapping ErrRejected, server_error for
+// everything else. Other logins are delegated to web (nil keeps the
 // default error response).
 func (b *Broker) OnLoginError(web oidc.OnLoginError) oidc.OnLoginError {
 	b.wrapMu.Lock()
@@ -196,6 +197,8 @@ func (b *Broker) OnLoginError(web oidc.OnLoginError) oidc.OnLoginError {
 		code := errServerError
 		if idpErr := r.URL.Query().Get("error"); stage == oidc.StageIDPError && slices.Contains(passthroughIDPErrors, idpErr) {
 			code = idpErr
+		} else if errors.Is(err, ErrRejected) {
+			code = errAccessDenied
 		}
 
 		redirect, rerr := nativeRedirectURL(n.redirectURI, url.Values{"error": {code}, "state": {n.state}})

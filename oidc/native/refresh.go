@@ -314,7 +314,14 @@ func (g *refreshGrant) rotate(reqCtx context.Context, s store.Session) bool {
 	}
 
 	attrs, err := g.authenticate(ctx, sub, func() { release(&sealed) })
-	if err != nil {
+	if errors.Is(err, ErrRejected) {
+		// the consumer will never accept the subject: end the session so
+		// the app logs in again rather than retrying until it expires
+		g.deleteSession(ctx, s.ID)
+		g.fail(ctx, http.StatusBadRequest, errInvalidGrant, "authenticate-rejected", "session rejected", err)
+
+		return true
+	} else if err != nil {
 		release(&sealed)
 		g.fail(ctx, http.StatusServiceUnavailable, errTemporarilyUnavailable, "authenticate", "", err)
 

@@ -113,6 +113,17 @@ native.Hooks{
   handed back to `Mint`. An error fails a login with
   `redirect_uri?error=server_error`, or a refresh with
   `503 temporarily_unavailable` (the session is kept).
+- An `Authenticate` error that wraps `native.ErrRejected` is permanent: no
+  retry can succeed, e.g. the subject has no account or lacks a required
+  claim. A login fails with `redirect_uri?error=access_denied`; a refresh
+  deletes the session and answers `400 invalid_grant`, so the app logs in
+  again instead of retrying until the session expires.
+
+  ```go
+  if sub.Email == "" {
+      return nil, fmt.Errorf("email claim missing: %w", native.ErrRejected)
+  }
+  ```
 - `Mint` gets the stored `Session` (subject projection, attributes, IDs,
   times). The broker never stores the tokens it returns.
 - On a refresh, `Authenticate` gets the subject `RP.Refresh` rebuilt. If
@@ -189,6 +200,7 @@ Token and revoke responses are JSON with `Cache-Control: no-store` and
 | unknown `client_id` / `redirect_uri` at authorize | `400`, no redirect |
 | IdP error / user cancels | redirect `redirect_uri?error=access_denied&state=…` |
 | `Authenticate` fails, or the IdP issued no refresh token, at login | redirect `redirect_uri?error=server_error&state=…` |
+| `Authenticate` fails with `ErrRejected` at login | redirect `redirect_uri?error=access_denied&state=…` |
 | missing or malformed parameter | `400 invalid_request` |
 | unknown `client_id` at token | `400 invalid_client` |
 | other `grant_type` | `400 unsupported_grant_type` |
@@ -200,7 +212,8 @@ Token and revoke responses are JSON with `Cache-Control: no-store` and
 | stored IdP refresh token does not decrypt (corrupt) | `400 invalid_grant`, session deleted |
 | stored IdP refresh token sealed with an unknown key | `500 server_error`, session kept (see [Security notes](#security-notes)) |
 | IdP unreachable or 5xx on refresh | `503 temporarily_unavailable`, session kept |
-| `Authenticate` or `Mint` fails on refresh | `503 temporarily_unavailable`, session kept |
+| `Authenticate` fails with `ErrRejected` on refresh | `400 invalid_grant`, session deleted |
+| `Authenticate` or `Mint` fails otherwise on refresh | `503 temporarily_unavailable`, session kept |
 | the request waited 60 s in total for other refreshes of the session | `503 temporarily_unavailable` |
 | repository failure | `500 server_error` (revoke: `503 temporarily_unavailable`) |
 

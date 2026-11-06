@@ -1,6 +1,7 @@
 package native
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -138,6 +139,20 @@ func TestFlow_AuthenticateFails(t *testing.T) {
 
 	loc := f.login(t, "st", tokens.S256(strings.Repeat("v", 43)))
 	assert.Equal(t, appRedirect+"?error=server_error&state=st", loc.String())
+}
+
+func TestFlow_AuthenticateRejects(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.setAuthenticateErr(fmt.Errorf("no account: %w", ErrRejected))
+
+	loc := f.login(t, "st", tokens.S256(strings.Repeat("v", 43)))
+	assert.Equal(t, appRedirect+"?error=access_denied&state=st", loc.String())
+
+	n, err := f.codes.Collection().CountAll(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, n, "no code stored")
 }
 
 func TestFlow_WebLoginUnaffected(t *testing.T) {
