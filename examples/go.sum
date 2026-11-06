@@ -39,8 +39,8 @@ github.com/fbiville/markdown-table-formatter v0.3.0 h1:PIm1UNgJrFs8q1htGTw+wnnNY
 github.com/fbiville/markdown-table-formatter v0.3.0/go.mod h1:q89TDtSEVDdTaufgSbfHpNVdPU/bmfvqNkrC5HagmLY=
 github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeORc=
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
-github.com/foomo/go v0.16.0 h1:Hw2rl0ieMB+s9NK8+MuIHzD22h48whyoKV+CA+lFG1k=
-github.com/foomo/go v0.16.0/go.mod h1:jeSB/atkoqSoJ3+ak0+b/Xtj7IMyDj1odzJroudT7Dw=
+github.com/foomo/go v0.17.1 h1:tDrovWbh1dOzsBX19pII6nAPIECswhBmNSPEGBYNawY=
+github.com/foomo/go v0.17.1/go.mod h1:Zz5aBFte6ayLEJ17n4L1bqYmEEja9xTeLKC0Z1wAy+0=
 github.com/foomo/keel v0.31.0 h1:3Snia+DqShYuUJsqEE+TAhcFpmJtkYw/NtIlznb3Rjg=
 github.com/foomo/keel v0.31.0/go.mod h1:iwnxSUfPG/qutRvc2AD3XM7p+m1bJ+QIui49H4Xq3cg=
 github.com/foomo/keel/persistence/mongo v0.33.0 h1:BywFmLVKVHC0+9b5QVzujWqUorVqJizKPEoMhZ0NmJU=

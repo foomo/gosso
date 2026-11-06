@@ -18,7 +18,7 @@ require (
 	github.com/crewjam/saml v0.5.1 // indirect
 	github.com/fbiville/markdown-table-formatter v0.3.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/foomo/go v0.16.0 // indirect
+	github.com/foomo/go v0.17.1 // indirect
 	github.com/foomo/keel v0.31.0 // indirect
 	github.com/foomo/mongo-lock v0.2.0 // indirect
 	github.com/foomo/opentelemetry-go v0.5.0 // indirect
