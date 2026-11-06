@@ -6,7 +6,7 @@ require (
 	github.com/beevik/etree v1.6.0
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/crewjam/saml v0.5.1
-	github.com/foomo/go v0.16.0
+	github.com/foomo/go v0.17.1
 	github.com/foomo/keel v0.31.0
 	github.com/foomo/keel/persistence/mongo v0.33.0
 	github.com/go-jose/go-jose/v4 v4.1.6
