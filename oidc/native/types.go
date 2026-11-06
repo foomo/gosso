@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"net/http"
 	"slices"
@@ -28,12 +29,21 @@ type Tokens struct {
 	ExpiresIn time.Duration
 }
 
+// ErrRejected is wrapped by a Hooks.Authenticate error when no retry can
+// succeed: the subject must not get or keep a session, e.g. because it has
+// no account or lacks a required claim. A login then fails with
+// error=access_denied; a refresh deletes the session and answers
+// invalid_grant, so the app logs in again instead of retrying.
+var ErrRejected = errors.New("native: subject rejected")
+
 // Hooks are the consumer's part of the broker.
 type Hooks struct {
 	// Authenticate runs after a native login and after each successful
 	// refresh. It returns attributes stored on the session. An error fails
 	// the login (redirect with error=server_error) or the refresh (503,
-	// session kept). On refresh, ctx and r.Context() are detached from the
+	// session kept); an error wrapping ErrRejected fails the login with
+	// error=access_denied and ends the session on refresh (400
+	// invalid_grant). On refresh, ctx and r.Context() are detached from the
 	// app's request, so they outlive a hang-up; honour their deadline.
 	Authenticate func(ctx context.Context, r *http.Request, sub sso.Subject[oidc.Payload]) (store.Attributes, error)
 	// Mint issues the consumer's access token for a session. It decides

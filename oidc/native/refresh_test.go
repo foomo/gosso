@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -204,6 +205,24 @@ func TestToken_RefreshAuthenticateFails(t *testing.T) {
 	// retired the old one; the broker must have kept the new one
 	assert.Equal(t, http.StatusOK, f.refresh(t, rt).status)
 	assert.Equal(t, 2, f.idp.RefreshCalls())
+}
+
+func TestToken_RefreshAuthenticateRejectsEndsSession(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	rt := f.fullLogin(t)
+	f.setAuthenticateErr(fmt.Errorf("no account: %w", ErrRejected))
+
+	assertOAuthError(t, f.refresh(t, rt), http.StatusBadRequest, errInvalidGrant)
+
+	_, err := sessionOf(t, f, rt)
+	require.ErrorIs(t, err, repository.ErrNotFound, "session ended")
+
+	// the app's retry is answered without another IdP call
+	f.setAuthenticateErr(nil)
+	assertOAuthError(t, f.refresh(t, rt), http.StatusBadRequest, errInvalidGrant)
+	assert.Equal(t, 1, f.idp.RefreshCalls())
 }
 
 func TestToken_RefreshAuthenticatePanicKeepsIdPToken(t *testing.T) {
